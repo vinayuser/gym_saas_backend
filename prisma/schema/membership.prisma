@@ -1,0 +1,118 @@
+// Membership plans, payments & offers
+
+model GymMembershipPlan {
+  id           String                 @id @default(uuid())
+  gymId        String
+  name         String
+  description  String?
+  billingCycle MembershipBillingCycle
+  price        Decimal                @db.Decimal(10, 2)
+  durationDays Int
+  features     Json?
+  isActive     Boolean                @default(true)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  deletedAt    DateTime?
+
+  gym         Gym          @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+
+  @@index([gymId])
+  @@map("gym_membership_plans")
+}
+
+model Membership {
+  id          String           @id @default(uuid())
+  gymId       String
+  memberId    String
+  planId      String
+  status      MembershipStatus @default(PENDING)
+  startDate   DateTime
+  endDate     DateTime
+  frozenAt    DateTime?
+  frozenUntil DateTime?
+  amountPaid  Decimal?         @db.Decimal(10, 2)
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  gym      Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member   Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  plan     GymMembershipPlan @relation(fields: [planId], references: [id])
+  payments MemberPayment[]
+  invoices Invoice[]
+
+  @@index([memberId])
+  @@index([gymId, status])
+  @@map("memberships")
+}
+
+model MemberPayment {
+  id           String        @id @default(uuid())
+  membershipId String
+  amount       Decimal       @db.Decimal(10, 2)
+  status       PaymentStatus @default(PENDING)
+  method       String?
+  providerRef  String?
+  paidAt       DateTime?
+  createdAt    DateTime      @default(now())
+
+  membership Membership @relation(fields: [membershipId], references: [id])
+
+  @@map("member_payments")
+}
+
+model Invoice {
+  id            String        @id @default(uuid())
+  gymId         String
+  membershipId  String?
+  invoiceNumber String        @unique
+  amount        Decimal       @db.Decimal(10, 2)
+  taxAmount     Decimal?      @db.Decimal(10, 2)
+  totalAmount   Decimal       @db.Decimal(10, 2)
+  status        InvoiceStatus @default(DRAFT)
+  issuedAt      DateTime?
+  dueAt         DateTime?
+  paidAt        DateTime?
+  pdfUrl        String?
+  createdAt     DateTime      @default(now())
+
+  membership Membership? @relation(fields: [membershipId], references: [id])
+
+  @@map("invoices")
+}
+
+model Coupon {
+  id          String    @id @default(uuid())
+  gymId       String
+  code        String
+  discountPct Decimal?  @db.Decimal(5, 2)
+  discountAmt Decimal?  @db.Decimal(10, 2)
+  maxUses     Int?
+  usedCount   Int       @default(0)
+  validFrom   DateTime
+  validUntil  DateTime
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, code])
+  @@map("coupons")
+}
+
+model Offer {
+  id          String   @id @default(uuid())
+  gymId       String
+  title       String
+  description String?
+  discountPct Decimal? @db.Decimal(5, 2)
+  validFrom   DateTime
+  validUntil  DateTime
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@map("offers")
+}

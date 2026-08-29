@@ -1,0 +1,60 @@
+// Member & body measurement models
+
+model Member {
+  id               String    @id @default(uuid())
+  gymId            String
+  userId           String?   @unique
+  memberCode       String
+  firstName        String
+  lastName         String
+  email            String?
+  phone            String?
+  dateOfBirth      DateTime?
+  gender           String?
+  address          String?
+  profileImage     String?
+  emergencyContact String?
+  emergencyPhone   String?
+  medicalNotes     String?
+  fitnessGoals     String?
+  qrCode           String?
+  isActive         Boolean   @default(true)
+  joinedAt         DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  gym           Gym               @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  user          User?             @relation(fields: [userId], references: [id])
+  memberships   Membership[]
+  attendance    Attendance[]
+  measurements  BodyMeasurement[]
+  dietPlans     DietPlan[]
+  workoutPlans  WorkoutPlan[]
+  eventBookings EventBooking[]
+  storeOrders   Sale[]
+
+  @@unique([gymId, memberCode])
+  @@index([gymId])
+  @@map("members")
+}
+
+model BodyMeasurement {
+  id         String   @id @default(uuid())
+  memberId   String
+  weight     Float?
+  height     Float?
+  chest      Float?
+  waist      Float?
+  hips       Float?
+  biceps     Float?
+  thighs     Float?
+  bodyFat    Float?
+  notes      String?
+  measuredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@map("body_measurements")
+}

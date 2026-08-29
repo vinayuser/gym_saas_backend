@@ -1,0 +1,39 @@
+// Gym owner invite & onboarding
+
+enum InviteStatus {
+  PENDING
+  SENT
+  PAYMENT_PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+model GymInvite {
+  id                String       @id @default(uuid())
+  email             String
+  inviteeName       String?
+  businessName      String?
+  note              String?
+  token             String       @unique
+  planId            String
+  status            InviteStatus @default(PENDING)
+  expiresAt         DateTime
+  sentAt            DateTime?
+  acceptedAt        DateTime?
+  createdById       String?
+  tenantId          String?
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  onboardingData    Json?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  plan      SubscriptionPlan @relation(fields: [planId], references: [id])
+  tenant    Tenant?          @relation(fields: [tenantId], references: [id])
+  createdBy User?            @relation("InviteCreatedBy", fields: [createdById], references: [id])
+
+  @@index([email])
+  @@index([status])
+  @@map("gym_invites")
+}

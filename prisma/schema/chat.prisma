@@ -1,0 +1,30 @@
+// Single gym community chat room
+
+enum ChatMediaType {
+  IMAGE
+  VIDEO
+}
+
+model GymChatMessage {
+  id         String          @id @default(uuid())
+  gymId      String
+  senderId   String
+  content    String?
+  mediaUrl   String?
+  mediaType  ChatMediaType?
+  isPinned   Boolean         @default(false)
+  pinnedAt   DateTime?
+  pinnedById String?
+  editedAt   DateTime?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  deletedAt  DateTime?
+
+  gym      Gym   @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  sender   User  @relation("GymChatSender", fields: [senderId], references: [id], onDelete: Cascade)
+  pinnedBy User? @relation("GymChatPinnedBy", fields: [pinnedById], references: [id])
+
+  @@index([gymId, createdAt])
+  @@index([gymId, isPinned])
+  @@map("gym_chat_messages")
+}

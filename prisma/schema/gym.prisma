@@ -1,0 +1,112 @@
+// Gym, branch, staff & trainer models
+
+model Gym {
+  id             String    @id @default(uuid())
+  tenantId       String
+  name           String
+  slug           String
+  description    String?
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  state          String?
+  country        String?   @default("India")
+  pincode        String?
+  latitude       Float?
+  longitude      Float?
+  logo           String?
+  images         String[]
+  operatingHours Json?
+  gstNumber      String?
+  taxRate        Decimal?  @db.Decimal(5, 2)
+  isActive       Boolean   @default(true)
+  qrCodeSecret   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branches          GymBranch[]
+  staff             GymStaff[]
+  trainers          Trainer[]
+  members           Member[]
+  membershipPlans   GymMembershipPlan[]
+  memberships       Membership[]
+  attendance        Attendance[]
+  events            Event[]
+  enquiries         Enquiry[]
+  products          Product[]
+  coupons           Coupon[]
+  offers            Offer[]
+  roleAssignments   UserRoleAssignment[]
+  productCategories ProductCategory[]
+  banners           Banner[]
+  sales             Sale[]
+  chatMessages      GymChatMessage[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@map("gyms")
+}
+
+model GymBranch {
+  id        String   @id @default(uuid())
+  gymId     String
+  name      String
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@map("gym_branches")
+}
+
+model GymStaff {
+  id               String   @id @default(uuid())
+  gymId            String
+  userId           String
+  designation      String?
+  joinedAt         DateTime @default(now())
+  employmentType   String?
+  baseSalary       Decimal? @db.Decimal(10, 2)
+  salaryCurrency   String?  @default("INR")
+  paymentFrequency String?
+  address          String?
+  city             String?
+  state            String?
+  pincode          String?
+  addressProofUrl  String?
+  idProofUrl       String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  gym  Gym  @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, userId])
+  @@map("gym_staff")
+}
+
+model Trainer {
+  id          String   @id @default(uuid())
+  gymId       String
+  userId      String   @unique
+  bio         String?
+  specialties String[]
+  experience  Int?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  gym      Gym           @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events   Event[]
+  workouts WorkoutPlan[]
+
+  @@map("trainers")
+}

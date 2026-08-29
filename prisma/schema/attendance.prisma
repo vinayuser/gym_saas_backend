@@ -1,0 +1,24 @@
+// Attendance tracking model
+
+model Attendance {
+  id         String           @id @default(uuid())
+  gymId      String
+  memberId   String
+  type       AttendanceType
+  source     AttendanceSource @default(QR_CODE)
+  checkInAt  DateTime         @default(now())
+  checkOutAt DateTime?
+  latitude   Float?
+  longitude  Float?
+  deviceInfo String?
+  isLate     Boolean          @default(false)
+  notes      String?
+  createdAt  DateTime         @default(now())
+
+  gym    Gym    @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, checkInAt])
+  @@index([memberId])
+  @@map("attendance")
+}

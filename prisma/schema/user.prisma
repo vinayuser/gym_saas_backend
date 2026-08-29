@@ -1,0 +1,83 @@
+// User & authentication models
+
+model User {
+  id              String     @id @default(uuid())
+  tenantId        String?
+  email           String
+  password        String
+  firstName       String
+  lastName        String
+  phone           String?
+  avatar          String?
+  role            UserRole   @default(MEMBER)
+  status          UserStatus @default(PENDING_VERIFICATION)
+  emailVerified   Boolean    @default(false)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  tenant            Tenant?            @relation("TenantUsers", fields: [tenantId], references: [id])
+  ownedTenant       Tenant?            @relation("TenantOwner")
+  refreshTokens     RefreshToken[]
+  passwordResets    PasswordReset[]
+  otpVerifications  OtpVerification[]
+  roleAssignments   UserRoleAssignment[]
+  gymStaff          GymStaff[]
+  trainerProfile    Trainer?
+  memberProfile     Member?
+  auditLogs         AuditLog[]
+  enquiriesAssigned Enquiry[]          @relation("AssignedStaff")
+  notifications     Notification[]
+  invitesCreated    GymInvite[]      @relation("InviteCreatedBy")
+  chatMessagesSent  GymChatMessage[] @relation("GymChatSender")
+  chatMessagesPinned GymChatMessage[] @relation("GymChatPinnedBy")
+  supportTickets    SupportTicket[]
+
+  @@unique([email, tenantId])
+  @@index([tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+model OtpVerification {
+  id         String    @id @default(uuid())
+  userId     String
+  code       String
+  type       String
+  expiresAt  DateTime
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("otp_verifications")
+}

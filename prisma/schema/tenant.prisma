@@ -1,0 +1,83 @@
+// SaaS tenant & subscription models
+
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  email     String
+  phone     String?
+  logo      String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  ownerId        String?       @unique
+  owner          User?         @relation("TenantOwner", fields: [ownerId], references: [id])
+  subscription   Subscription?
+  gyms           Gym[]
+  users          User[]        @relation("TenantUsers")
+  enquiries      Enquiry[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  gymInvites     GymInvite[]
+  supportTickets SupportTicket[]
+
+  @@index([slug])
+  @@map("tenants")
+}
+
+model SubscriptionPlan {
+  id            String               @id @default(uuid())
+  name          String
+  type          SubscriptionPlanType @unique
+  gymLimit      Int
+  priceMonthly  Decimal              @db.Decimal(10, 2)
+  priceYearly   Decimal              @db.Decimal(10, 2)
+  features      Json?
+  isActive      Boolean              @default(true)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  subscriptions Subscription[]
+  gymInvites    GymInvite[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id                 String             @id @default(uuid())
+  tenantId           String             @unique
+  planId             String
+  status             SubscriptionStatus @default(TRIAL)
+  trialEndsAt        DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  cancelledAt        DateTime?
+  stripeCustomerId   String?
+  razorpaySubId      String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id])
+  payments SaasPayment[]
+
+  @@map("subscriptions")
+}
+
+model SaasPayment {
+  id             String        @id @default(uuid())
+  subscriptionId String
+  amount         Decimal       @db.Decimal(10, 2)
+  currency       String        @default("INR")
+  status         PaymentStatus @default(PENDING)
+  provider       String?
+  providerRef    String?
+  paidAt         DateTime?
+  createdAt      DateTime      @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@map("saas_payments")
+}

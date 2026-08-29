@@ -1,0 +1,39 @@
+// Lead / enquiry model
+
+model Enquiry {
+  id                    String     @id @default(uuid())
+  tenantId              String
+  gymId                 String?
+  name                  String
+  lastName              String?
+  email                 String?
+  phone                 String?
+  gender                String?
+  dateOfBirth           DateTime?
+  address               String?
+  city                  String?
+  state                 String?
+  pincode               String?
+  occupation            String?
+  source                String?    @default("walk-in")
+  referralSource        String?
+  interestedIn          String?
+  fitnessGoal           String?
+  preferredContact      String?
+  budget                Decimal?   @db.Decimal(10, 2)
+  trialDate             DateTime?
+  status                LeadStatus @default(NEW)
+  notes                 String?
+  followUpAt            DateTime?
+  assignedToId          String?
+  convertedAt           DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  gym        Gym?   @relation(fields: [gymId], references: [id])
+  assignedTo User?  @relation("AssignedStaff", fields: [assignedToId], references: [id])
+
+  @@index([tenantId, status])
+  @@map("enquiries")
+}

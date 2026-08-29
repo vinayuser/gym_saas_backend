@@ -1,0 +1,25 @@
+// Platform support tickets (gym owners → FitSphere Pro support)
+
+model SupportTicket {
+  id          String               @id @default(uuid())
+  tenantId    String?
+  userId      String
+  category    SupportTicketCategory
+  subject     String
+  message     String
+  senderEmail String
+  senderName  String?
+  status      SupportTicketStatus  @default(OPEN)
+  emailSent   Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("support_tickets")
+}

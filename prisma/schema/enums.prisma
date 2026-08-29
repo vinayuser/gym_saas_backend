@@ -1,0 +1,171 @@
+// Shared enums used across models
+
+enum UserRole {
+  SUPER_ADMIN
+  GYM_OWNER
+  MANAGER
+  RECEPTIONIST
+  TRAINER
+  MEMBER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum SubscriptionPlanType {
+  SINGLE_GYM
+  TWO_GYMS
+  FIVE_GYMS
+  UNLIMITED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PAST_DUE
+}
+
+enum MembershipStatus {
+  ACTIVE
+  FROZEN
+  EXPIRED
+  CANCELLED
+  PENDING
+}
+
+enum MembershipBillingCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum AttendanceType {
+  CHECK_IN
+  CHECK_OUT
+}
+
+enum AttendanceSource {
+  QR_CODE
+  PUNCH
+  FRONTDESK
+  MOBILE
+  BIOMETRIC
+}
+
+enum EventType {
+  ZUMBA
+  YOGA
+  OUTDOOR
+  WORKSHOP
+  PERSONAL_TRAINING
+  OTHER
+}
+
+enum EventRecurrence {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  TRIAL
+  FOLLOW_UP
+  CONVERTED
+  LOST
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  PUSH
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum BannerStatus {
+  DRAFT
+  ACTIVE
+  SCHEDULED
+  EXPIRED
+  ARCHIVED
+}
+
+enum BannerCategory {
+  PROMOTION
+  NEW_CLASS
+  MAINTENANCE
+  APP_EXCLUSIVE
+}
+
+enum BannerPlacement {
+  GLOBAL_HOMEPAGE
+  CLASSES_SECTION
+  DASHBOARD_TOP
+  MEMBER_STORE
+}
+
+enum BannerCtaType {
+  CLASS_BOOKING
+  STORE_PRODUCT
+  EVENT
+  EXTERNAL_URL
+}
+
+enum StoreOrderStatus {
+  PLACED
+  CONFIRMED
+  PREPARING
+  READY_FOR_PICKUP
+  COLLECTED
+  CANCELLED
+}
+
+enum StoreFulfillmentType {
+  PICKUP
+  DELIVERY
+}
+
+enum SupportTicketCategory {
+  GENERAL
+  BILLING_SUBSCRIPTION
+  PLAN_CHANGE
+  TECHNICAL
+  ACCOUNT_ACCESS
+  FEATURE_REQUEST
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}

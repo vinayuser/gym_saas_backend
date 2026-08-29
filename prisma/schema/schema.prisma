@@ -1,0 +1,11 @@
+// Prisma root config — generator & datasource
+// Models are split into separate files in this folder (one file per domain/table group).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

@@ -1,0 +1,31 @@
+// In-app banner / campaign ads
+
+model Banner {
+  id             String          @id @default(uuid())
+  gymId          String
+  name           String
+  internalCode   String?
+  category       BannerCategory  @default(PROMOTION)
+  placement      BannerPlacement @default(GLOBAL_HOMEPAGE)
+  imageUrl       String?
+  startDate      DateTime?
+  endDate        DateTime?
+  status         BannerStatus  @default(DRAFT)
+  timeSlots      String[]        @default([])
+  targetAudience String[]        @default([])
+  ctaType        BannerCtaType?
+  ctaDestination String?
+  impressions    Int             @default(0)
+  clicks         Int             @default(0)
+  isActive       Boolean         @default(true)
+  sortOrder      Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  deletedAt      DateTime?
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId])
+  @@index([gymId, status])
+  @@map("banners")
+}
