@@ -11,9 +11,13 @@ model User {
   avatar          String?
   role            UserRole   @default(MEMBER)
   status          UserStatus @default(PENDING_VERIFICATION)
-  emailVerified   Boolean    @default(false)
-  emailVerifiedAt DateTime?
-  lastLoginAt     DateTime?
+  emailVerified          Boolean    @default(false)
+  emailVerifiedAt        DateTime?
+  twoFactorEnabled       Boolean    @default(false)
+  totpSecret             String?
+  twoFactorConfirmedAt   DateTime?
+  notificationPreferences Json?
+  lastLoginAt            DateTime?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   deletedAt       DateTime?
@@ -45,9 +49,12 @@ model RefreshToken {
   id        String    @id @default(uuid())
   userId    String
   token     String    @unique
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  ipAddress  String?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

@@ -17,6 +17,18 @@ router.use(authenticate, resolveTenant);
 router.get('/', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'), GymController.list);
 router.post('/', requireRoles('SUPER_ADMIN', 'GYM_OWNER'), validate(createGymSchema), GymController.create);
 router.get(
+  '/:gymId/dashboard/analytics',
+  requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'),
+  validate(gymIdParamSchema),
+  GymController.dashboardAnalytics
+);
+router.get(
+  '/:gymId/dashboard/reports',
+  requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'),
+  validate(gymIdParamSchema),
+  GymController.dashboardReports
+);
+router.get(
   '/:gymId/dashboard',
   requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'),
   validate(gymIdParamSchema),

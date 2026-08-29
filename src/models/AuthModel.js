@@ -20,6 +20,47 @@ export const revokeAllUserTokens = (userId) =>
     data: { revokedAt: new Date() },
   });
 
+export const revokeOtherUserTokens = (userId, keepToken) =>
+  prisma.refreshToken.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+      NOT: { token: keepToken },
+    },
+    data: { revokedAt: new Date() },
+  });
+
+export const listActiveSessions = (userId) =>
+  prisma.refreshToken.findMany({
+    where: {
+      userId,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      token: true,
+      userAgent: true,
+      ipAddress: true,
+      createdAt: true,
+      lastUsedAt: true,
+      expiresAt: true,
+    },
+  });
+
+export const revokeSessionById = (userId, sessionId) =>
+  prisma.refreshToken.updateMany({
+    where: { id: sessionId, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+export const touchRefreshToken = (token) =>
+  prisma.refreshToken.updateMany({
+    where: { token, revokedAt: null },
+    data: { lastUsedAt: new Date() },
+  });
+
 export const createPasswordReset = (data) => prisma.passwordReset.create({ data });
 
 export const findPasswordReset = (token) =>

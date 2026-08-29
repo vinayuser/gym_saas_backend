@@ -13,6 +13,16 @@ export const dashboard = asyncHandler(async (req, res) => {
   successResponse(res, data);
 });
 
+export const dashboardAnalytics = asyncHandler(async (req, res) => {
+  const data = await DashboardService.getOwnerAnalytics(req.tenantId, req.params.gymId);
+  successResponse(res, data);
+});
+
+export const dashboardReports = asyncHandler(async (req, res) => {
+  const data = await DashboardService.getOwnerReports(req.tenantId, req.params.gymId);
+  successResponse(res, data);
+});
+
 export const getById = asyncHandler(async (req, res) => {
   const gym = await GymService.getById(req.tenantId, req.params.gymId);
   successResponse(res, gym);

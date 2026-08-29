@@ -5,13 +5,22 @@ import * as AuthModel from '../models/AuthModel.js';
 import * as TenantModel from '../models/TenantModel.js';
 import * as GymModel from '../models/GymModel.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt.js';
+import { signAccessToken, signRefreshToken, verifyRefreshToken, signTwoFactorPendingToken, verifyTwoFactorPendingToken } from '../utils/jwt.js';
+import {
+  generateTotpSecret,
+  buildTotpUri,
+  verifyTotpCode,
+  generateTotpQrDataUrl,
+  encryptTotpSecret,
+  decryptTotpSecret,
+} from '../utils/totp.js';
 import {
   BadRequestError,
   ConflictError,
   UnauthorizedError,
   NotFoundError,
 } from '../utils/errors.js';
+import { normalizeNotificationPreferences } from '../constants/notificationPreferences.js';
 
 const slugify = (text) =>
   text
@@ -22,8 +31,11 @@ const slugify = (text) =>
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
 const sanitizeUser = (user) => {
-  const { password, tenant, roleAssignments, ...safe } = user;
-  return safe;
+  const { password, tenant, roleAssignments, totpSecret, ...safe } = user;
+  return {
+    ...safe,
+    notificationPreferences: normalizeNotificationPreferences(safe.notificationPreferences),
+  };
 };
 
 const loadGymsForTenant = async (tenantId, limit = 100) => {
@@ -37,7 +49,7 @@ const loadGymsForTenant = async (tenantId, limit = 100) => {
   return gyms;
 };
 
-const issueTokens = async (userId, email, role, tenantId) => {
+const issueTokens = async (userId, email, role, tenantId, sessionMeta = {}) => {
   const payload = { userId, email, role, tenantId };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken({ userId });
@@ -49,9 +61,29 @@ const issueTokens = async (userId, email, role, tenantId) => {
     userId,
     token: refreshToken,
     expiresAt,
+    userAgent: sessionMeta.userAgent?.slice(0, 512) || null,
+    ipAddress: sessionMeta.ipAddress || null,
+    lastUsedAt: new Date(),
   });
 
   return { accessToken, refreshToken };
+};
+
+const completeLogin = async (user, sessionMeta) => {
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
+
+  const tokens = await issueTokens(user.id, user.email, user.role, user.tenantId, sessionMeta);
+  const gyms = await loadGymsForTenant(user.tenantId);
+
+  return {
+    user: sanitizeUser(user),
+    tenant: user.tenant,
+    gyms,
+    tokens,
+  };
 };
 
 export const register = async ({ email, password, firstName, lastName, phone, businessName }) => {
@@ -139,7 +171,7 @@ export const register = async ({ email, password, firstName, lastName, phone, bu
   };
 };
 
-export const login = async ({ email, password }) => {
+export const login = async ({ email, password }, sessionMeta = {}) => {
   const normalizedEmail = email.toLowerCase();
   const user = await prisma.user.findFirst({
     where: { email: normalizedEmail, deletedAt: null },
@@ -159,20 +191,39 @@ export const login = async ({ email, password }) => {
     throw new UnauthorizedError('Account suspended');
   }
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLoginAt: new Date() },
+  if (user.twoFactorEnabled) {
+    return {
+      requiresTwoFactor: true,
+      twoFactorToken: signTwoFactorPendingToken(user.id),
+    };
+  }
+
+  return completeLogin(user, sessionMeta);
+};
+
+export const verifyTwoFactorLogin = async ({ twoFactorToken, code }, sessionMeta = {}) => {
+  let payload;
+  try {
+    payload = verifyTwoFactorPendingToken(twoFactorToken);
+  } catch {
+    throw new UnauthorizedError('Two-factor session expired. Please sign in again.');
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { id: payload.userId, deletedAt: null },
+    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true } } },
   });
 
-  const tokens = await issueTokens(user.id, user.email, user.role, user.tenantId);
-  const gyms = await loadGymsForTenant(user.tenantId);
+  if (!user?.twoFactorEnabled || !user.totpSecret) {
+    throw new BadRequestError('Two-factor authentication is not enabled');
+  }
 
-  return {
-    user: sanitizeUser(user),
-    tenant: user.tenant,
-    gyms,
-    tokens,
-  };
+  const secret = decryptTotpSecret(user.totpSecret);
+  if (!(await verifyTotpCode(secret, code))) {
+    throw new UnauthorizedError('Invalid authentication code');
+  }
+
+  return completeLogin(user, sessionMeta);
 };
 
 export const refresh = async (refreshToken) => {
@@ -186,6 +237,8 @@ export const refresh = async (refreshToken) => {
   if (!stored || stored.expiresAt < new Date()) {
     throw new UnauthorizedError('Refresh token expired or revoked');
   }
+
+  await AuthModel.touchRefreshToken(refreshToken);
 
   const tokens = await issueTokens(
     stored.user.id,
@@ -268,4 +321,159 @@ export const verifyOtp = async ({ email, code, type }) => {
   }
 
   return { message: 'Verification successful' };
+};
+
+export const changePassword = async (userId, { currentPassword, newPassword, refreshToken }) => {
+  const user = await UserModel.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+
+  const valid = await comparePassword(currentPassword, user.password);
+  if (!valid) {
+    throw new UnauthorizedError('Current password is incorrect');
+  }
+
+  const hashedPassword = await hashPassword(newPassword);
+  await UserModel.update(userId, { password: hashedPassword });
+
+  if (refreshToken) {
+    await AuthModel.revokeOtherUserTokens(userId, refreshToken);
+  } else {
+    await AuthModel.revokeAllUserTokens(userId);
+  }
+
+  return { message: 'Password updated successfully' };
+};
+
+export const listSessions = async (userId, currentRefreshToken) => {
+  const sessions = await AuthModel.listActiveSessions(userId);
+
+  return {
+    sessions: sessions.map((session) => ({
+      id: session.id,
+      userAgent: session.userAgent,
+      ipAddress: session.ipAddress,
+      createdAt: session.createdAt,
+      lastUsedAt: session.lastUsedAt,
+      expiresAt: session.expiresAt,
+      isCurrent: Boolean(currentRefreshToken && session.token === currentRefreshToken),
+    })),
+  };
+};
+
+export const revokeSession = async (userId, sessionId, currentRefreshToken) => {
+  const sessions = await AuthModel.listActiveSessions(userId);
+  const target = sessions.find((s) => s.id === sessionId);
+  if (!target) throw new NotFoundError('Session not found');
+
+  if (currentRefreshToken && target.token === currentRefreshToken) {
+    throw new BadRequestError('Cannot revoke your current session from here. Sign out instead.');
+  }
+
+  await AuthModel.revokeSessionById(userId, sessionId);
+  return { message: 'Session revoked' };
+};
+
+export const revokeOtherSessions = async (userId, currentRefreshToken) => {
+  if (!currentRefreshToken) {
+    throw new BadRequestError('Current session token is required');
+  }
+
+  await AuthModel.revokeOtherUserTokens(userId, currentRefreshToken);
+  return { message: 'Other sessions revoked' };
+};
+
+export const getTwoFactorStatus = async (userId) => {
+  const user = await UserModel.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+
+  return {
+    enabled: Boolean(user.twoFactorEnabled),
+    confirmedAt: user.twoFactorConfirmedAt,
+  };
+};
+
+export const setupTwoFactor = async (userId) => {
+  const user = await UserModel.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+
+  if (user.twoFactorEnabled) {
+    throw new BadRequestError('Two-factor authentication is already enabled');
+  }
+
+  const secret = generateTotpSecret();
+  const otpauthUrl = buildTotpUri(user.email, secret);
+  const qrCodeDataUrl = await generateTotpQrDataUrl(otpauthUrl);
+
+  await UserModel.update(userId, {
+    totpSecret: encryptTotpSecret(secret),
+    twoFactorEnabled: false,
+    twoFactorConfirmedAt: null,
+  });
+
+  return {
+    secret,
+    otpauthUrl,
+    qrCodeDataUrl,
+  };
+};
+
+export const verifyTwoFactorSetup = async (userId, code) => {
+  const user = await UserModel.findById(userId);
+  if (!user?.totpSecret) {
+    throw new BadRequestError('Start two-factor setup first');
+  }
+
+  const secret = decryptTotpSecret(user.totpSecret);
+  if (!(await verifyTotpCode(secret, code))) {
+    throw new BadRequestError('Invalid authentication code');
+  }
+
+  await UserModel.update(userId, {
+    twoFactorEnabled: true,
+    twoFactorConfirmedAt: new Date(),
+  });
+
+  return { message: 'Two-factor authentication enabled', enabled: true };
+};
+
+export const disableTwoFactor = async (userId, { password, code }) => {
+  const user = await UserModel.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+
+  if (!user.twoFactorEnabled) {
+    throw new BadRequestError('Two-factor authentication is not enabled');
+  }
+
+  const valid = await comparePassword(password, user.password);
+  if (!valid) {
+    throw new UnauthorizedError('Password is incorrect');
+  }
+
+  const secret = decryptTotpSecret(user.totpSecret);
+  if (!(await verifyTotpCode(secret, code))) {
+    throw new BadRequestError('Invalid authentication code');
+  }
+
+  await UserModel.update(userId, {
+    twoFactorEnabled: false,
+    totpSecret: null,
+    twoFactorConfirmedAt: null,
+  });
+
+  return { message: 'Two-factor authentication disabled', enabled: false };
+};
+
+export const updateNotificationPreferences = async (userId, preferences) => {
+  const user = await UserModel.findById(userId);
+  if (!user) throw new NotFoundError('User not found');
+
+  const normalized = normalizeNotificationPreferences(preferences);
+  const updated = await UserModel.update(userId, {
+    notificationPreferences: normalized,
+  });
+
+  return {
+    message: 'Notification preferences saved',
+    notificationPreferences: normalizeNotificationPreferences(updated.notificationPreferences),
+  };
 };
