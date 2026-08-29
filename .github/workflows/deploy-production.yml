@@ -52,7 +52,7 @@ jobs:
           SCP=(scp -i ~/.ssh/oracle_key -P "$PORT" -o StrictHostKeyChecking=accept-new)
 
           "${SSH[@]}" "${USER}@${HOST}" "sudo mkdir -p '${APP_HOME}' && sudo chown -R '${USER}:${USER}' '${APP_HOME}'"
-          "${SCP[@]}" docker-compose.yml deploy/nginx.host-proxy.conf deploy/nginx.medisewa-fitsphere.conf deploy/ensure-fitsphere-nginx.py "${USER}@${HOST}:${APP_HOME}/"
+          "${SCP[@]}" docker-compose.yml "${USER}@${HOST}:${APP_HOME}/docker-compose.yml"
           printf '%s\n' "$BACKEND_ENV" > /tmp/backend.env
           "${SCP[@]}" /tmp/backend.env "${USER}@${HOST}:${APP_HOME}/.env"
           rm -f /tmp/backend.env
@@ -66,40 +66,6 @@ jobs:
           cd '${APP_HOME}'
           export IMAGE='${IMAGE_LOCAL}'
           docker compose up -d --remove-orphans --force-recreate
-          sudo cp -f nginx.host-proxy.conf /etc/nginx/sites-available/gym-saas
-          sudo ln -sfn /etc/nginx/sites-available/gym-saas /etc/nginx/sites-enabled/gym-saas
-          sudo cp -f nginx.medisewa-fitsphere.conf /etc/nginx/snippets/gym-saas-fitsphere.conf
-          # Medisewa deploys overwrite sites-available/medisewa — always re-ensure FitSphere include
-          sudo python3 - <<'PY'
-          from pathlib import Path
-          path = Path('/etc/nginx/sites-available/medisewa')
-          if not path.exists():
-              raise SystemExit('medisewa nginx site missing')
-          text = path.read_text()
-          lines = []
-          for line in text.splitlines(True):
-              s = line.lstrip()
-              if s.startswith('n    # FitSphere') or s.strip() == 'n':
-                  continue
-              if 'include /etc/nginx/snippets/gym-saas-fitsphere.conf' in line:
-                  continue
-              if s.startswith('# FitSphere Gym SaaS'):
-                  continue
-              lines.append(line)
-          text = ''.join(lines)
-          needle = '    client_max_body_size 25m;\n'
-          insert = (
-              '    client_max_body_size 25m;\n\n'
-              '    # FitSphere Gym SaaS\n'
-              '    include /etc/nginx/snippets/gym-saas-fitsphere.conf;\n'
-          )
-          if needle not in text:
-              raise SystemExit('could not locate client_max_body_size in medisewa site')
-          text = text.replace(needle, insert, 1)
-          path.write_text(text)
-          print('fitsphere nginx include ensured')
-          PY
-          sudo nginx -t && sudo systemctl reload nginx
           docker image prune -f
           docker ps --filter name=gym-saas-
           curl -sS -o /dev/null -w 'health:%{http_code}\n' http://127.0.0.1:5010/api/v1/health || true
