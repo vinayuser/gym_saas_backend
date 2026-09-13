@@ -30,12 +30,16 @@ const assertInviteUsable = (invite) => {
   }
 };
 
-const serializeInvite = (invite) => ({
-  ...invite,
-  planName: invite.plan?.name,
-  planType: invite.plan?.type,
-  priceMonthly: invite.plan?.priceMonthly,
-});
+const serializeInvite = (invite) => {
+  const primaryGym = invite.tenant?.gyms?.[0] || null;
+  return {
+    ...invite,
+    planName: invite.plan?.name,
+    planType: invite.plan?.type,
+    priceMonthly: invite.plan?.priceMonthly,
+    primaryGym,
+  };
+};
 
 export const listPlans = async () => {
   const plans = await prisma.subscriptionPlan.findMany({
@@ -49,8 +53,8 @@ export const listInvites = async (query) => {
   const pagination = parsePagination(query);
   const { items, total } = await InviteModel.findMany({
     status: query.status && query.status !== 'ALL' ? query.status : undefined,
-    search: query.search,
-    skip: (pagination.page - 1) * pagination.limit,
+    search: query.search || pagination.search,
+    skip: pagination.skip,
     take: pagination.limit,
   });
 

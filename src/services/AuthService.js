@@ -21,6 +21,7 @@ import {
   NotFoundError,
 } from '../utils/errors.js';
 import { normalizeNotificationPreferences } from '../constants/notificationPreferences.js';
+import { normalizeTenantFeatures } from '../constants/tenantFeatures.js';
 
 const slugify = (text) =>
   text
@@ -80,7 +81,12 @@ const completeLogin = async (user, sessionMeta) => {
 
   return {
     user: sanitizeUser(user),
-    tenant: user.tenant,
+    tenant: user.tenant
+      ? {
+          ...user.tenant,
+          features: normalizeTenantFeatures(user.tenant.features),
+        }
+      : null,
     gyms,
     tokens,
   };
@@ -175,7 +181,7 @@ export const login = async ({ email, password }, sessionMeta = {}) => {
   const normalizedEmail = email.toLowerCase();
   const user = await prisma.user.findFirst({
     where: { email: normalizedEmail, deletedAt: null },
-    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true } } },
+    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true, features: true } } },
   });
 
   if (!user) {
@@ -211,7 +217,7 @@ export const verifyTwoFactorLogin = async ({ twoFactorToken, code }, sessionMeta
 
   const user = await prisma.user.findFirst({
     where: { id: payload.userId, deletedAt: null },
-    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true } } },
+    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true, features: true } } },
   });
 
   if (!user?.twoFactorEnabled || !user.totpSecret) {
@@ -267,7 +273,12 @@ export const getProfile = async (userId) => {
 
   return {
     user: sanitizeUser(user),
-    tenant: user.tenant,
+    tenant: user.tenant
+      ? {
+          ...user.tenant,
+          features: normalizeTenantFeatures(user.tenant.features),
+        }
+      : null,
     gyms,
   };
 };

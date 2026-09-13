@@ -20,6 +20,9 @@ import gymOwnerRoutes from './gymOwner.routes.js';
 import transactionRoutes from './transaction.routes.js';
 import uploadRoutes from './upload.routes.js';
 import supportRoutes from './support.routes.js';
+import publicRoutes from './public.routes.js';
+import memberPortalRoutes from './memberPortal.routes.js';
+import subscriptionPlanRoutes from './subscriptionPlan.routes.js';
 
 const router = Router();
 
@@ -27,6 +30,8 @@ router.get('/health', (_req, res) => {
   res.json({ success: true, message: 'Gym SaaS API is running', timestamp: new Date().toISOString() });
 });
 
+router.use('/public', publicRoutes);
+router.use('/member', memberPortalRoutes);
 router.use('/auth', authRoutes);
 router.use('/tenants', tenantRoutes);
 router.use('/gyms', gymRoutes);
@@ -45,6 +50,7 @@ router.use('/gyms', trainerRoutes);
 router.use('/gyms', chatRoutes);
 router.use('/invites', inviteRoutes);
 router.use('/gym-owners', gymOwnerRoutes);
+router.use('/subscription-plans', subscriptionPlanRoutes);
 router.use('/transactions', transactionRoutes);
 router.use('/media', uploadRoutes);
 router.use('/support', supportRoutes);

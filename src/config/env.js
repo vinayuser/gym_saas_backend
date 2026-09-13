@@ -15,7 +15,10 @@ const env = {
   },
   redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
-  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((o) => o.trim()),
+  corsOrigins: (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:8081,*')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
     max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),

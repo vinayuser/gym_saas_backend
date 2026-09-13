@@ -68,6 +68,17 @@ export const listInvitesQuerySchema = z.object({
   }),
 });
 
+export const publishAppSchema = z.object({
+  params: z.object({
+    id: z.string().uuid(),
+  }),
+  body: z.object({
+    appAlias: z.string().min(2).max(60).optional(),
+    appPublished: z.boolean().optional(),
+    adsEnabled: z.boolean().optional(),
+  }),
+});
+
 export const listGymOwnersQuerySchema = z.object({
   query: z.object({
     page: z.coerce.number().optional(),

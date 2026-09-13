@@ -16,6 +16,13 @@ export const createGymSchema = z.object({
     operatingHours: z.record(z.any()).optional(),
     gstNumber: z.string().optional(),
     taxRate: z.number().min(0).max(100).optional(),
+    logo: z.string().url().optional().nullable(),
+    coverImage: z.string().url().optional().nullable(),
+    primaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+    secondaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+    accentColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+    themeMode: z.enum(['dark', 'light']).optional(),
+    appTagline: z.string().max(120).optional().nullable(),
   }),
 });
 

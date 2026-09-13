@@ -13,19 +13,34 @@ const inviteInclude = {
     },
   },
   tenant: {
-    select: { id: true, name: true, slug: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      gyms: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          appAlias: true,
+          appPublished: true,
+          adsEnabled: true,
+          isActive: true,
+        },
+      },
+    },
   },
 };
 
 export const findMany = async ({ status, search, skip, take }) => {
   const where = {};
   if (status) where.status = status;
-  if (search) {
-    where.OR = [
-      { email: { contains: search, mode: 'insensitive' } },
-      { inviteeName: { contains: search, mode: 'insensitive' } },
-      { businessName: { contains: search, mode: 'insensitive' } },
-    ];
+
+  const emailSearch = search?.trim();
+  if (emailSearch) {
+    where.email = { contains: emailSearch, mode: 'insensitive' };
   }
 
   const [items, total] = await Promise.all([

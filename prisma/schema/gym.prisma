@@ -16,6 +16,16 @@ model Gym {
   latitude       Float?
   longitude      Float?
   logo           String?
+  coverImage     String?
+  primaryColor   String?   @default("#C3F400")
+  secondaryColor String?   @default("#0B0F0A")
+  accentColor    String?   @default("#FFFFFF")
+  themeMode      String?   @default("dark")
+  appTagline     String?
+  /// Unique public key for the white-label mobile app (resolve branding / ads)
+  appAlias       String?   @unique
+  appPublished   Boolean   @default(false)
+  adsEnabled     Boolean   @default(true)
   images         String[]
   operatingHours Json?
   gstNumber      String?

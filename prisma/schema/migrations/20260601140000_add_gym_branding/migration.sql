@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "gyms" ADD COLUMN "primaryColor" TEXT DEFAULT '#C3F400';
+ALTER TABLE "gyms" ADD COLUMN "secondaryColor" TEXT DEFAULT '#0B0F0A';
+ALTER TABLE "gyms" ADD COLUMN "accentColor" TEXT DEFAULT '#FFFFFF';
+ALTER TABLE "gyms" ADD COLUMN "themeMode" TEXT DEFAULT 'dark';
+ALTER TABLE "gyms" ADD COLUMN "appTagline" TEXT;
+ALTER TABLE "gyms" ADD COLUMN "coverImage" TEXT;

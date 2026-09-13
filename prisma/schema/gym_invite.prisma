@@ -35,5 +35,7 @@ model GymInvite {
 
   @@index([email])
   @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
   @@map("gym_invites")
 }

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as InviteController from '../controllers/InviteController.js';
+import * as AppPublishController from '../controllers/AppPublishController.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { requireRoles } from '../middlewares/rbac.middleware.js';
@@ -10,6 +11,7 @@ import {
   checkoutSchema,
   verifyPaymentSchema,
   listInvitesQuerySchema,
+  publishAppSchema,
 } from '../validators/invite.validator.js';
 
 const router = Router();
@@ -34,5 +36,7 @@ router.get('/', validate(listInvitesQuerySchema), InviteController.list);
 router.post('/', validate(createInviteSchema), InviteController.create);
 router.patch('/:id/sent', validate(inviteIdParamSchema), InviteController.markSent);
 router.patch('/:id/revoke', validate(inviteIdParamSchema), InviteController.revoke);
+router.get('/:id/publish', validate(inviteIdParamSchema), AppPublishController.getPublish);
+router.put('/:id/publish', validate(publishAppSchema), AppPublishController.updatePublish);
 
 export default router;

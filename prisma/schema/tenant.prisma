@@ -2,15 +2,17 @@
 
 model Tenant {
   id        String    @id @default(uuid())
-  name      String
-  slug      String    @unique
-  email     String
-  phone     String?
-  logo      String?
-  isActive  Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
+  name           String
+  slug           String    @unique
+  email          String
+  phone          String?
+  logo           String?
+  isActive       Boolean   @default(true)
+  /// Module flags: banners, store, finances, events, chat, trainers, leads, attendance
+  features       Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
 
   ownerId        String?       @unique
   owner          User?         @relation("TenantOwner", fields: [ownerId], references: [id])
@@ -24,6 +26,9 @@ model Tenant {
   supportTickets SupportTicket[]
 
   @@index([slug])
+  @@index([email])
+  @@index([isActive])
+  @@index([createdAt])
   @@map("tenants")
 }
 

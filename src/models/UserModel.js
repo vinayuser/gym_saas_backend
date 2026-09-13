@@ -13,7 +13,7 @@ export const findById = (id) =>
   prisma.user.findFirst({
     where: { id, deletedAt: null },
     include: {
-      tenant: { select: { id: true, name: true, slug: true } },
+      tenant: { select: { id: true, name: true, slug: true, features: true, isActive: true } },
       roleAssignments: { include: { role: true, gym: { select: { id: true, name: true } } } },
     },
   });

@@ -14,7 +14,13 @@ const app = express();
 app.use(helmet());
 app.use(
   cors({
-    origin: env.corsOrigins,
+    origin: (origin, callback) => {
+      // Allow mobile apps / Expo (no Origin) and configured web origins
+      if (!origin || env.corsOrigins.includes('*') || env.corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, env.nodeEnv !== 'production');
+    },
     credentials: true,
   })
 );

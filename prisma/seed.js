@@ -146,6 +146,11 @@ async function main() {
         country: 'India',
         pincode: '400001',
         qrCodeSecret: 'demo-secret-key',
+        primaryColor: '#C3F400',
+        secondaryColor: '#0B0F0A',
+        accentColor: '#FFFFFF',
+        themeMode: 'dark',
+        appTagline: 'Train harder. Live stronger.',
         operatingHours: {
           monday: { open: '06:00', close: '22:00' },
           tuesday: { open: '06:00', close: '22:00' },
@@ -158,25 +163,87 @@ async function main() {
       },
     });
 
-    await prisma.member.create({
+    const memberPassword = await bcrypt.hash('Member@123', 12);
+    const memberUser = await prisma.user.create({
       data: {
-        gymId: gym.id,
-        memberCode: 'M00001',
+        email: 'member@demo.com',
+        password: memberPassword,
         firstName: 'John',
         lastName: 'Doe',
-        email: 'john@example.com',
         phone: '+919888888888',
-        gender: 'male',
-        fitnessGoals: 'Weight loss and muscle gain',
+        role: UserRole.MEMBER,
+        status: 'ACTIVE',
+        emailVerified: true,
+        tenantId: tenant.id,
       },
     });
 
-    console.log('Demo tenant, gym, and member created');
+    await prisma.member.create({
+      data: {
+        gymId: gym.id,
+        userId: memberUser.id,
+        memberCode: 'M00001',
+        firstName: 'John',
+        lastName: 'Doe',
+        email: 'member@demo.com',
+        phone: '+919888888888',
+        gender: 'male',
+        fitnessGoals: 'Weight loss and muscle gain',
+        qrCode: 'M00001',
+      },
+    });
+
+    console.log('Demo tenant, gym, owner, and member created');
+  } else {
+    // Ensure branding + member login exist for already-seeded DBs
+    const tenant = await prisma.tenant.findFirst({ where: { slug: 'demo-fitness' } });
+    const gym = await prisma.gym.findFirst({ where: { slug: 'demo-downtown' } });
+    if (gym) {
+      await prisma.gym.update({
+        where: { id: gym.id },
+        data: {
+          primaryColor: gym.primaryColor || '#C3F400',
+          secondaryColor: gym.secondaryColor || '#0B0F0A',
+          accentColor: gym.accentColor || '#FFFFFF',
+          themeMode: gym.themeMode || 'dark',
+          appTagline: gym.appTagline || 'Train harder. Live stronger.',
+        },
+      });
+    }
+
+    let memberUser = await prisma.user.findFirst({ where: { email: 'member@demo.com' } });
+    if (!memberUser && gym && tenant) {
+      const memberPassword = await bcrypt.hash('Member@123', 12);
+      memberUser = await prisma.user.create({
+        data: {
+          email: 'member@demo.com',
+          password: memberPassword,
+          firstName: 'John',
+          lastName: 'Doe',
+          phone: '+919888888888',
+          role: UserRole.MEMBER,
+          status: 'ACTIVE',
+          emailVerified: true,
+          tenantId: tenant.id,
+        },
+      });
+      const existingMember = await prisma.member.findFirst({
+        where: { gymId: gym.id, memberCode: 'M00001' },
+      });
+      if (existingMember) {
+        await prisma.member.update({
+          where: { id: existingMember.id },
+          data: { userId: memberUser.id, email: 'member@demo.com', qrCode: 'M00001' },
+        });
+      }
+    }
   }
 
   console.log('Seed completed');
   console.log('Super Admin: superadmin@gymsaas.com / Admin@123');
   console.log('Gym Owner:   owner@demo.com / Owner@123');
+  console.log('Member:      member@demo.com / Member@123');
+  console.log('Gym slug:    demo-downtown');
 }
 
 main()
