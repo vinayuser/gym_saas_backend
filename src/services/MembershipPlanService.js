@@ -1,6 +1,7 @@
 import * as PlanModel from '../models/MembershipPlanModel.js';
 import * as GymModel from '../models/GymModel.js';
 import { NotFoundError } from '../utils/errors.js';
+import { assertGymCapacity } from './PlatformBillingService.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
 const validateGym = async (tenantId, gymId) => {
@@ -31,6 +32,7 @@ export const getById = async (tenantId, gymId, planId) => {
 
 export const create = async (tenantId, gymId, body) => {
   await validateGym(tenantId, gymId);
+  await assertGymCapacity(tenantId, gymId, 'plans');
   return PlanModel.create({
     gymId,
     name: body.name,

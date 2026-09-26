@@ -23,6 +23,9 @@ import supportRoutes from './support.routes.js';
 import publicRoutes from './public.routes.js';
 import memberPortalRoutes from './memberPortal.routes.js';
 import subscriptionPlanRoutes from './subscriptionPlan.routes.js';
+import roleRoutes from './role.routes.js';
+import notificationRoutes from './notification.routes.js';
+import platformBillingRoutes from './platformBilling.routes.js';
 
 const router = Router();
 
@@ -54,5 +57,8 @@ router.use('/subscription-plans', subscriptionPlanRoutes);
 router.use('/transactions', transactionRoutes);
 router.use('/media', uploadRoutes);
 router.use('/support', supportRoutes);
+router.use('/roles', roleRoutes);
+router.use('/notifications', notificationRoutes);
+router.use('/platform-billing', platformBillingRoutes);
 
 export default router;

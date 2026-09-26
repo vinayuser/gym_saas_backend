@@ -3,9 +3,9 @@ import { z } from 'zod';
 export const createInviteSchema = z.object({
   body: z.object({
     email: z.string().email(),
-    planId: z.string().uuid(),
+    planId: z.string().uuid().optional(),
     inviteeName: z.string().max(120).optional(),
-    businessName: z.string().max(200).optional(),
+    businessName: z.string().min(2).max(200),
     note: z.string().max(500).optional(),
     expiryDays: z.coerce.number().int().min(1).max(90).optional(),
   }),
@@ -42,6 +42,7 @@ export const checkoutSchema = z.object({
     logoUrl: z.string().url().max(2000).optional().nullable(),
     videoUrl: z.string().url().max(2000).optional().nullable(),
     photoUrls: z.array(z.string().url().max(2000)).max(5).optional(),
+    addonKeys: z.array(z.string().min(1).max(40)).max(10).optional(),
   }),
 });
 
@@ -94,5 +95,14 @@ export const updateOwnerStatusSchema = z.object({
   }),
   body: z.object({
     status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']),
+  }),
+});
+
+export const resetOwnerPasswordSchema = z.object({
+  params: z.object({
+    id: z.string().uuid(),
+  }),
+  body: z.object({
+    password: z.string().min(8).max(72),
   }),
 });

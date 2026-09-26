@@ -14,6 +14,7 @@
     "migrate:status": "prisma migrate status",
     "migrate:reset": "prisma migrate reset",
     "db:seed": "node prisma/seed.js",
+    "db:seed:volume": "node prisma/scripts/seed-volume.js",
     "db:setup": "npm run migrate:deploy && npm run prisma:generate && npm run db:seed",
     "prisma:studio": "prisma studio",
     "seed": "node prisma/seed.js"

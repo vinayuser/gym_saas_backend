@@ -1,5 +1,6 @@
 import prisma from '../config/database.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
+import { hashPassword } from '../utils/password.js';
 
 export const listGymOwners = async (query) => {
   const pagination = parsePagination(query);
@@ -99,4 +100,19 @@ export const updateOwnerStatus = async (ownerId, status) => {
       status: true,
     },
   });
+};
+
+export const resetOwnerPassword = async (ownerId, password) => {
+  const owner = await prisma.user.findFirst({
+    where: { id: ownerId, role: 'GYM_OWNER', deletedAt: null },
+  });
+  if (!owner) return null;
+
+  const hashed = await hashPassword(password);
+  await prisma.user.update({
+    where: { id: ownerId },
+    data: { password: hashed },
+  });
+
+  return { id: owner.id, email: owner.email };
 };

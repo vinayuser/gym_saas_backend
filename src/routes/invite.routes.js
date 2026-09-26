@@ -3,7 +3,7 @@ import * as InviteController from '../controllers/InviteController.js';
 import * as AppPublishController from '../controllers/AppPublishController.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
-import { requireRoles } from '../middlewares/rbac.middleware.js';
+import { requirePlatform } from '../middlewares/rbac.middleware.js';
 import {
   createInviteSchema,
   inviteIdParamSchema,
@@ -30,13 +30,14 @@ router.post(
   InviteController.verifyPayment
 );
 
-router.use(authenticate, requireRoles('SUPER_ADMIN'));
+router.use(authenticate);
 
-router.get('/', validate(listInvitesQuerySchema), InviteController.list);
-router.post('/', validate(createInviteSchema), InviteController.create);
-router.patch('/:id/sent', validate(inviteIdParamSchema), InviteController.markSent);
-router.patch('/:id/revoke', validate(inviteIdParamSchema), InviteController.revoke);
-router.get('/:id/publish', validate(inviteIdParamSchema), AppPublishController.getPublish);
-router.put('/:id/publish', validate(publishAppSchema), AppPublishController.updatePublish);
+router.get('/', requirePlatform('businesses.view', 'dashboard.view'), validate(listInvitesQuerySchema), InviteController.list);
+router.get('/:id/overview', requirePlatform('businesses.view'), validate(inviteIdParamSchema), InviteController.getOverview);
+router.post('/', requirePlatform('businesses.manage'), validate(createInviteSchema), InviteController.create);
+router.patch('/:id/sent', requirePlatform('businesses.manage'), validate(inviteIdParamSchema), InviteController.markSent);
+router.patch('/:id/revoke', requirePlatform('businesses.manage'), validate(inviteIdParamSchema), InviteController.revoke);
+router.get('/:id/publish', requirePlatform('businesses.view'), validate(inviteIdParamSchema), AppPublishController.getPublish);
+router.put('/:id/publish', requirePlatform('businesses.manage'), validate(publishAppSchema), AppPublishController.updatePublish);
 
 export default router;

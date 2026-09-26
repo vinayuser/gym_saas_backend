@@ -4,6 +4,7 @@ import * as GymModel from '../models/GymModel.js';
 import * as UserModel from '../models/UserModel.js';
 import { hashPassword } from '../utils/password.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors.js';
+import { assertGymCapacity } from './PlatformBillingService.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
 const ROLE_MAP = {
@@ -117,6 +118,10 @@ export const getById = async (tenantId, gymId, staffId) => {
 
 export const create = async (tenantId, gymId, body) => {
   await validateGym(tenantId, gymId);
+  await assertGymCapacity(tenantId, gymId, 'staff');
+  if (body.staffRole === 'trainer' || body.staffRole === 'nutritionist') {
+    await assertGymCapacity(tenantId, gymId, 'trainers');
+  }
 
   const { firstName, lastName } = body.firstName
     ? { firstName: body.firstName, lastName: body.lastName || '' }

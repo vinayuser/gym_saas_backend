@@ -32,6 +32,10 @@ model Gym {
   taxRate        Decimal?  @db.Decimal(5, 2)
   isActive       Boolean   @default(true)
   qrCodeSecret   String?
+  /// Per-gym purchased modules: { attendance, store, day_pass }
+  commercialAddons Json?
+  /// Owner-set price for a one-day visit when the day-pass add-on is on
+  dayPassPrice     Decimal?  @db.Decimal(10, 2)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?

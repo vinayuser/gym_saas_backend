@@ -13,3 +13,9 @@ export const updateStatus = asyncHandler(async (req, res) => {
   if (!owner) throw new NotFoundError('Gym owner not found');
   successResponse(res, { owner });
 });
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const owner = await GymOwnerService.resetOwnerPassword(req.params.id, req.body.password);
+  if (!owner) throw new NotFoundError('Gym owner not found');
+  successResponse(res, { owner }, 'Password updated');
+});

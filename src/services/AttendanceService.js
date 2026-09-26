@@ -17,8 +17,11 @@ export const list = async (tenantId, gymId, query) => {
     ...pagination,
     date: query.date,
   });
-  const stats = await AttendanceModel.todayStats(gymId);
-  const memberCount = await MemberModel.countByGym(gymId);
+  const [stats, memberCount, trend] = await Promise.all([
+    AttendanceModel.todayStats(gymId),
+    MemberModel.countByGym(gymId),
+    AttendanceModel.dailyTrend(gymId, 14),
+  ]);
 
   return {
     records: records.map((r) => ({
@@ -31,6 +34,7 @@ export const list = async (tenantId, gymId, query) => {
       capacity: 150,
       memberTotal: memberCount,
     },
+    trend,
     pagination: buildPaginationMeta(total, pagination.page, pagination.limit),
   };
 };

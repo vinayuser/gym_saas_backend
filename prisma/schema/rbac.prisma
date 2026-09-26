@@ -5,6 +5,8 @@ model Role {
   name        String   @unique
   slug        String   @unique
   description String?
+  /// gym = owner-side staff roles. platform = sub-admin roles for the admin panel.
+  scope       String   @default("gym")
   isSystem    Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -21,6 +23,8 @@ model Permission {
   slug        String   @unique
   module      String
   description String?
+  /// gym = gym-owner tools. platform = admin panel sections.
+  scope       String   @default("gym")
   createdAt   DateTime @default(now())
 
   roles RolePermission[]

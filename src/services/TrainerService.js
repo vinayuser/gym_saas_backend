@@ -1,30 +1,35 @@
 import prisma from '../config/database.js';
 import * as GymModel from '../models/GymModel.js';
 import { NotFoundError } from '../utils/errors.js';
+import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
-export const performance = async (tenantId, gymId) => {
+export const performance = async (tenantId, gymId, query = {}) => {
   const gym = await GymModel.findById(gymId, tenantId);
   if (!gym) throw new NotFoundError('Gym not found');
 
-  const trainers = await prisma.trainer.findMany({
-    where: { gymId, isActive: true },
-    include: {
-      user: { select: { firstName: true, lastName: true, email: true } },
-      events: { include: { _count: { select: { bookings: true } } } },
-    },
-  });
-
-  const totalSessions = trainers.reduce(
-    (s, t) => s + t.events.reduce((es, e) => es + e._count.bookings, 0),
-    0
-  );
+  const pagination = parsePagination(query);
+  const where = { gymId, isActive: true };
+  const [trainers, activeTrainers, sessionRows] = await Promise.all([
+    prisma.trainer.findMany({
+      where,
+      skip: pagination.skip,
+      take: pagination.limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true } },
+        events: { include: { _count: { select: { bookings: true } } } },
+      },
+    }),
+    prisma.trainer.count({ where }),
+    prisma.eventBooking.count({ where: { event: { gymId } } }),
+  ]);
 
   return {
     summary: {
-      activeTrainers: trainers.length,
-      avgRating: trainers.length ? 4.8 : 0,
-      totalSessions,
-      efficiency: trainers.length ? 86 : 0,
+      activeTrainers,
+      avgRating: activeTrainers ? 4.8 : 0,
+      totalSessions: sessionRows,
+      efficiency: activeTrainers ? 86 : 0,
     },
     trainers: trainers.map((t) => {
       const sessions = t.events.reduce((s, e) => s + e._count.bookings, 0);
@@ -39,5 +44,6 @@ export const performance = async (tenantId, gymId) => {
         status: t.isActive ? 'ACTIVE' : 'INACTIVE',
       };
     }),
+    pagination: buildPaginationMeta(activeTrainers, pagination.page, pagination.limit),
   };
 };

@@ -1,10 +1,10 @@
 import * as CategoryService from '../services/CategoryService.js';
-import { successResponse } from '../utils/response.js';
+import { successResponse, paginatedResponse } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const list = asyncHandler(async (req, res) => {
-  const categories = await CategoryService.list(req.tenantId, req.params.gymId);
-  successResponse(res, categories);
+  const result = await CategoryService.list(req.tenantId, req.params.gymId, req.query);
+  paginatedResponse(res, result.categories, result.pagination);
 });
 
 export const create = asyncHandler(async (req, res) => {

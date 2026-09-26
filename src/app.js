@@ -28,14 +28,16 @@ app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-app.use(
-  rateLimit({
-    windowMs: env.rateLimit.windowMs,
-    max: env.rateLimit.max,
-    standardHeaders: true,
-    legacyHeaders: false,
-  })
-);
+if (env.nodeEnv === 'production') {
+  app.use(
+    rateLimit({
+      windowMs: env.rateLimit.windowMs,
+      max: env.rateLimit.max,
+      standardHeaders: true,
+      legacyHeaders: false,
+    })
+  );
+}
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 

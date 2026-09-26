@@ -12,6 +12,11 @@ export const list = asyncHandler(async (req, res) => {
   successResponse(res, result);
 });
 
+export const getOverview = asyncHandler(async (req, res) => {
+  const overview = await InviteService.getBusinessOverview(req.params.id);
+  successResponse(res, overview);
+});
+
 export const create = asyncHandler(async (req, res) => {
   const invite = await InviteService.createInvite(req.user.id, req.body);
   successResponse(res, { invite, link: InviteService.getInviteLink(invite.token) }, 'Invite created', 201);

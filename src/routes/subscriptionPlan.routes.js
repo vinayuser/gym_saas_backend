@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as SubscriptionPlanController from '../controllers/SubscriptionPlanController.js';
 import { validate } from '../middlewares/validate.middleware.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
-import { requireRoles } from '../middlewares/rbac.middleware.js';
+import { requirePlatform } from '../middlewares/rbac.middleware.js';
 import {
   listPlansQuerySchema,
   planIdParamSchema,
@@ -11,10 +11,10 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRoles('SUPER_ADMIN'));
+router.use(authenticate);
 
-router.get('/', validate(listPlansQuerySchema), SubscriptionPlanController.list);
-router.get('/:id', validate(planIdParamSchema), SubscriptionPlanController.getById);
-router.patch('/:id', validate(updatePlanSchema), SubscriptionPlanController.update);
+router.get('/', requirePlatform('plans.view'), validate(listPlansQuerySchema), SubscriptionPlanController.list);
+router.get('/:id', requirePlatform('plans.view'), validate(planIdParamSchema), SubscriptionPlanController.getById);
+router.patch('/:id', requirePlatform('plans.manage'), validate(updatePlanSchema), SubscriptionPlanController.update);
 
 export default router;

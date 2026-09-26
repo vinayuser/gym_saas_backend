@@ -18,6 +18,20 @@ export const updateTenantStatusSchema = z.object({
   }),
 });
 
+export const updateGymAddonsSchema = z.object({
+  params: z.object({
+    id: z.string().uuid(),
+    gymId: z.string().uuid(),
+  }),
+  body: z.object({
+    addons: z.object({
+      attendance: z.boolean().optional(),
+      store: z.boolean().optional(),
+      day_pass: z.boolean().optional(),
+    }),
+  }),
+});
+
 export const updateTenantFeaturesSchema = z.object({
   params: z.object({
     id: z.string().uuid(),

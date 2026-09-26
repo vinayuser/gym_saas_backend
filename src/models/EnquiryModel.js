@@ -1,6 +1,6 @@
 import prisma from '../config/database.js';
 
-export const findMany = (tenantId, gymId, { status }) => {
+export const findMany = (tenantId, gymId, { status } = {}) => {
   const where = {
     tenantId,
     ...(gymId ? { gymId } : {}),

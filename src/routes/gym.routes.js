@@ -4,6 +4,7 @@ import { authenticate } from '../middlewares/auth.middleware.js';
 import { resolveTenant } from '../middlewares/tenant.middleware.js';
 import { requireRoles } from '../middlewares/rbac.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
+import * as PlatformBillingController from '../controllers/PlatformBillingController.js';
 import {
   createGymSchema,
   updateGymSchema,
@@ -36,6 +37,12 @@ router.get(
 );
 router.get('/:gymId', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST', 'TRAINER'), validate(gymIdParamSchema), GymController.getById);
 router.put('/:gymId', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER'), validate(updateGymSchema), GymController.update);
+router.patch(
+  '/:gymId/billing',
+  requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER'),
+  validate(gymIdParamSchema),
+  PlatformBillingController.updateGymCommercial
+);
 router.delete('/:gymId', requireRoles('SUPER_ADMIN', 'GYM_OWNER'), validate(gymIdParamSchema), GymController.remove);
 
 export default router;

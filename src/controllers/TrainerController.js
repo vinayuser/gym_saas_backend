@@ -3,6 +3,6 @@ import { successResponse } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const performance = asyncHandler(async (req, res) => {
-  const data = await TrainerService.performance(req.tenantId, req.params.gymId);
+  const data = await TrainerService.performance(req.tenantId, req.params.gymId, req.query);
   successResponse(res, data);
 });

@@ -1,0 +1,37 @@
+/// Admin-managed commercial catalog (one row) and optional modules.
+
+model PlatformCatalog {
+  id                   String   @id @default("default")
+  baseName             String   @default("Base gym")
+  baseDescription      String?
+  basePriceMonthly     Decimal  @default(1999) @db.Decimal(10, 2)
+  basePriceYearly      Decimal  @default(19990) @db.Decimal(10, 2)
+  baseMaxStaff         Int?
+  baseMaxTrainers      Int?
+  baseMaxMembers       Int?
+  baseMaxPlans         Int?
+  extraGymPriceMonthly Decimal  @default(999) @db.Decimal(10, 2)
+  extraGymPriceYearly  Decimal  @default(9990) @db.Decimal(10, 2)
+  extraUseBaseLimits   Boolean  @default(true)
+  extraMaxStaff        Int?
+  extraMaxTrainers     Int?
+  extraMaxMembers      Int?
+  extraMaxPlans        Int?
+  updatedAt            DateTime @updatedAt
+
+  @@map("platform_catalog")
+}
+
+model PlatformAddon {
+  id                 String   @id @default(uuid())
+  key                String   @unique
+  name               String
+  description        String?
+  pricePerGymMonthly Decimal  @db.Decimal(10, 2)
+  pricePerGymYearly  Decimal  @default(0) @db.Decimal(10, 2)
+  isActive           Boolean  @default(true)
+  sortOrder          Int      @default(0)
+  updatedAt          DateTime @updatedAt
+
+  @@map("platform_addons")
+}

@@ -6,7 +6,7 @@ import { NotFoundError } from '../utils/errors.js';
 const startOfMonth = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
 const startOfLastMonth = (d = new Date()) => new Date(d.getFullYear(), d.getMonth() - 1, 1);
 
-export const getOwnerDashboard = async (tenantId, gymId) => {
+export const getOwnerDashboard = async (tenantId, gymId, period = 'day') => {
   const gym = await GymModel.findById(gymId, tenantId);
   if (!gym) throw new NotFoundError('Gym not found');
 
@@ -18,6 +18,7 @@ export const getOwnerDashboard = async (tenantId, gymId) => {
     activeMembers,
     membersLastMonth,
     attendanceStats,
+    weekTrend,
     expiringMemberships,
     recentPayments,
     recentInvoices,
@@ -32,6 +33,7 @@ export const getOwnerDashboard = async (tenantId, gymId) => {
       },
     }),
     AttendanceModel.todayStats(gymId),
+    AttendanceModel.dailyTrend(gymId, 7),
     prisma.membership.findMany({
       where: {
         gymId,
@@ -90,10 +92,18 @@ export const getOwnerDashboard = async (tenantId, gymId) => {
       ? Math.round((attendanceStats.currentlyInside / peakCapacity) * 1000) / 10
       : 0;
 
-  const heatmap = Array.from({ length: 24 }, (_, hour) => {
-    const row = attendanceStats.hourly?.find((h) => Number(h.hour) === hour);
-    return { hour, count: row?.count ?? 0 };
-  });
+  const hourLabel = (hour) => {
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    const value = hour % 12 || 12;
+    return `${value} ${suffix}`;
+  };
+  const heatmap =
+    period === 'week'
+      ? weekTrend.map((item) => ({ label: item.label, count: item.count }))
+      : (attendanceStats.hourly || []).map((item) => ({
+          label: hourLabel(item.hour),
+          count: item.count,
+        }));
 
   const transactions = [
     ...recentPayments.map((p) => ({
@@ -272,7 +282,7 @@ export const getOwnerAnalytics = async (tenantId, gymId) => {
 
   const planIds = planGroups.map((p) => p.planId);
   const plans = planIds.length
-    ? await prisma.membershipPlan.findMany({
+    ? await prisma.gymMembershipPlan.findMany({
         where: { id: { in: planIds } },
         select: { id: true, name: true },
       })

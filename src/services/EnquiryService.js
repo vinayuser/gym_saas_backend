@@ -41,11 +41,12 @@ const mapEnquiryInput = (body) => ({
 
 export const list = async (tenantId, gymId) => {
   await validateGym(tenantId, gymId);
-  const enquiries = await EnquiryModel.findMany(tenantId, gymId, {});
+  const enquiries = await EnquiryModel.findMany(tenantId, gymId);
   const grouped = await EnquiryModel.countByStatus(tenantId, gymId);
+  const countOf = (group) => (typeof group._count === 'number' ? group._count : group._count?._all || 0);
   const stats = {
-    total: enquiries.length,
-    byStatus: Object.fromEntries(grouped.map((g) => [g.status, g._count])),
+    total: grouped.reduce((sum, group) => sum + countOf(group), 0),
+    byStatus: Object.fromEntries(grouped.map((group) => [group.status, countOf(group)])),
   };
   return { enquiries, stats };
 };

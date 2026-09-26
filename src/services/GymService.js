@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import * as GymModel from '../models/GymModel.js';
-import * as TenantModel from '../models/TenantModel.js';
-import { NotFoundError, ForbiddenError } from '../utils/errors.js';
+import { NotFoundError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
 const slugify = (text) =>
@@ -10,20 +9,7 @@ const slugify = (text) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 
-const enforceGymLimit = async (tenantId) => {
-  const tenant = await TenantModel.findById(tenantId);
-  if (!tenant?.subscription?.plan) return;
-
-  const { gymLimit } = tenant.subscription.plan;
-  if (gymLimit === -1) return;
-
-  const currentCount = await TenantModel.countGyms(tenantId);
-  if (currentCount >= gymLimit) {
-    throw new ForbiddenError(
-      `Gym limit reached (${gymLimit}). Upgrade your subscription plan.`
-    );
-  }
-};
+const EMPTY_ADDONS = { attendance: false, store: false, day_pass: false };
 
 export const list = async (tenantId, query) => {
   const pagination = parsePagination(query);
@@ -42,8 +28,6 @@ export const getById = async (tenantId, gymId) => {
 };
 
 export const create = async (tenantId, data) => {
-  await enforceGymLimit(tenantId);
-
   let slug = slugify(data.name);
   const existing = await GymModel.findBySlug(tenantId, slug);
   if (existing) slug = `${slug}-${Date.now().toString(36)}`;
@@ -54,6 +38,7 @@ export const create = async (tenantId, data) => {
     slug,
     qrCodeSecret: uuidv4(),
     images: [],
+    commercialAddons: EMPTY_ADDONS,
   });
 };
 

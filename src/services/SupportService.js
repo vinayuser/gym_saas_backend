@@ -66,7 +66,7 @@ export const list = async (user, query) => {
   const skip = (page - 1) * limit;
 
   const where = {};
-  if (user.role !== 'SUPER_ADMIN') {
+  if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_ADMIN') {
     if (!user.tenantId) {
       where.userId = user.id;
     } else {
@@ -104,8 +104,8 @@ export const list = async (user, query) => {
 };
 
 export const updateStatus = async (user, ticketId, status) => {
-  if (user.role !== 'SUPER_ADMIN') {
-    throw new ForbiddenError('Only super admins can update ticket status');
+  if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_ADMIN') {
+    throw new ForbiddenError('Only platform admins can update ticket status');
   }
 
   const existing = await SupportModel.findById(ticketId);

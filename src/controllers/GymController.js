@@ -9,7 +9,11 @@ export const list = asyncHandler(async (req, res) => {
 });
 
 export const dashboard = asyncHandler(async (req, res) => {
-  const data = await DashboardService.getOwnerDashboard(req.tenantId, req.params.gymId);
+  const data = await DashboardService.getOwnerDashboard(
+    req.tenantId,
+    req.params.gymId,
+    req.query.period === 'week' ? 'week' : 'day'
+  );
   successResponse(res, data);
 });
 

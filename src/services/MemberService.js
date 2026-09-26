@@ -3,6 +3,7 @@ import * as MemberModel from '../models/MemberModel.js';
 import * as GymModel from '../models/GymModel.js';
 import * as PlanModel from '../models/MembershipPlanModel.js';
 import { NotFoundError, BadRequestError } from '../utils/errors.js';
+import { assertGymCapacity } from './PlatformBillingService.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
 const validateGym = async (tenantId, gymId) => {
@@ -39,6 +40,7 @@ export const getById = async (tenantId, gymId, memberId) => {
 
 export const create = async (tenantId, gymId, data) => {
   const gym = await validateGym(tenantId, gymId);
+  await assertGymCapacity(tenantId, gymId, 'members');
   const { planId, membershipStartDate, ...memberData } = data;
 
   let plan = null;

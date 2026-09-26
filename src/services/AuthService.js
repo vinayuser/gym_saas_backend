@@ -22,6 +22,7 @@ import {
 } from '../utils/errors.js';
 import { normalizeNotificationPreferences } from '../constants/notificationPreferences.js';
 import { normalizeTenantFeatures } from '../constants/tenantFeatures.js';
+import { permissionSlugsForUser } from './PlatformAdminService.js';
 
 const slugify = (text) =>
   text
@@ -78,9 +79,13 @@ const completeLogin = async (user, sessionMeta) => {
 
   const tokens = await issueTokens(user.id, user.email, user.role, user.tenantId, sessionMeta);
   const gyms = await loadGymsForTenant(user.tenantId);
+  const safeUser = sanitizeUser(user);
+  if (user.role === 'SUPER_ADMIN' || user.role === 'PLATFORM_ADMIN') {
+    safeUser.platformPermissions = await permissionSlugsForUser(user);
+  }
 
   return {
-    user: sanitizeUser(user),
+    user: safeUser,
     tenant: user.tenant
       ? {
           ...user.tenant,
@@ -270,9 +275,13 @@ export const getProfile = async (userId) => {
   if (!user) throw new NotFoundError('User not found');
 
   const gyms = await loadGymsForTenant(user.tenantId);
+  const safeUser = sanitizeUser(user);
+  if (user.role === 'SUPER_ADMIN' || user.role === 'PLATFORM_ADMIN') {
+    safeUser.platformPermissions = await permissionSlugsForUser(user);
+  }
 
   return {
-    user: sanitizeUser(user),
+    user: safeUser,
     tenant: user.tenant
       ? {
           ...user.tenant,

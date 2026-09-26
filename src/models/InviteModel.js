@@ -17,6 +17,29 @@ const inviteInclude = {
       id: true,
       name: true,
       slug: true,
+      email: true,
+      phone: true,
+      logo: true,
+      isActive: true,
+      createdAt: true,
+      subscription: {
+        select: {
+          id: true,
+          status: true,
+          currentPeriodEnd: true,
+          plan: { select: { name: true } },
+        },
+      },
+      owner: {
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          status: true,
+        },
+      },
       gyms: {
         where: { deletedAt: null },
         orderBy: { createdAt: 'asc' },
@@ -24,10 +47,12 @@ const inviteInclude = {
           id: true,
           name: true,
           slug: true,
+          logo: true,
           appAlias: true,
           appPublished: true,
           adsEnabled: true,
           isActive: true,
+          commercialAddons: true,
         },
       },
     },
@@ -40,7 +65,11 @@ export const findMany = async ({ status, search, skip, take }) => {
 
   const emailSearch = search?.trim();
   if (emailSearch) {
-    where.email = { contains: emailSearch, mode: 'insensitive' };
+    where.OR = [
+      { email: { contains: emailSearch, mode: 'insensitive' } },
+      { businessName: { contains: emailSearch, mode: 'insensitive' } },
+      { tenant: { name: { contains: emailSearch, mode: 'insensitive' } } },
+    ];
   }
 
   const [items, total] = await Promise.all([

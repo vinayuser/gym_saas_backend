@@ -1,6 +1,7 @@
 import * as CategoryModel from '../models/CategoryModel.js';
 import * as GymModel from '../models/GymModel.js';
 import { NotFoundError, ValidationError } from '../utils/errors.js';
+import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
 const validateGym = async (tenantId, gymId) => {
   const gym = await GymModel.findById(gymId, tenantId);
@@ -8,9 +9,14 @@ const validateGym = async (tenantId, gymId) => {
   return gym;
 };
 
-export const list = async (tenantId, gymId) => {
+export const list = async (tenantId, gymId, query = {}) => {
   await validateGym(tenantId, gymId);
-  return CategoryModel.findMany(gymId);
+  const pagination = parsePagination(query);
+  const [categories, total] = await CategoryModel.findMany(gymId, {
+    skip: pagination.skip,
+    take: pagination.limit,
+  });
+  return { categories, pagination: buildPaginationMeta(total, pagination.page, pagination.limit) };
 };
 
 export const create = async (tenantId, gymId, body) => {

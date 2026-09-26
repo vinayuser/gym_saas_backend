@@ -22,6 +22,11 @@ export const updateStatus = asyncHandler(async (req, res) => {
   successResponse(res, { tenant }, `Tenant ${tenant.isActive ? 'activated' : 'deactivated'}`);
 });
 
+export const updateGymAddons = asyncHandler(async (req, res) => {
+  const gym = await TenantService.updateGymAddons(req.params.id, req.params.gymId, req.body.addons);
+  successResponse(res, { gym }, 'Gym add-ons updated');
+});
+
 export const updateFeatures = asyncHandler(async (req, res) => {
   const tenant = await TenantService.updateTenantFeatures(req.params.id, req.body.features);
   successResponse(res, { tenant }, 'Tenant features updated');

@@ -88,7 +88,6 @@ export const listTenants = async (query) => {
         gyms: {
           where: { deletedAt: null },
           orderBy: { createdAt: 'asc' },
-          take: 1,
           select: {
             id: true,
             name: true,
@@ -96,6 +95,7 @@ export const listTenants = async (query) => {
             appAlias: true,
             appPublished: true,
             adsEnabled: true,
+            commercialAddons: true,
           },
         },
         _count: { select: { gyms: true, users: true } },
@@ -121,9 +121,14 @@ export const listTenants = async (query) => {
       updatedAt: t.updatedAt,
       owner: t.owner,
       subscription: t.subscription,
-      gymCount: t._count.gyms,
+      gymCount: t.gyms.length,
       userCount: t._count.users,
       primaryGym: t.gyms[0] || null,
+      gyms: t.gyms.map((gym) => ({
+        id: gym.id,
+        name: gym.name,
+        commercialAddons: gym.commercialAddons,
+      })),
     })),
     pagination: buildPaginationMeta(total, pagination.page, pagination.limit),
   };
@@ -149,6 +154,37 @@ export const updateTenantStatus = async (tenantId, isActive) => {
       isActive: true,
     },
   });
+};
+
+const ADDON_KEYS = ['attendance', 'store', 'day_pass'];
+
+const readAddons = (value) => {
+  const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    attendance: Boolean(src.attendance),
+    store: Boolean(src.store),
+    day_pass: Boolean(src.day_pass),
+  };
+};
+
+export const updateGymAddons = async (tenantId, gymId, addonsInput) => {
+  const gym = await prisma.gym.findFirst({
+    where: { id: gymId, tenantId, deletedAt: null },
+  });
+  if (!gym) throw new NotFoundError('Gym not found');
+
+  const next = readAddons(gym.commercialAddons);
+  for (const key of ADDON_KEYS) {
+    if (typeof addonsInput?.[key] === 'boolean') next[key] = addonsInput[key];
+  }
+
+  const updated = await prisma.gym.update({
+    where: { id: gymId },
+    data: { commercialAddons: next },
+    select: { id: true, name: true, commercialAddons: true },
+  });
+
+  return { ...updated, commercialAddons: readAddons(updated.commercialAddons) };
 };
 
 export const updateTenantFeatures = async (tenantId, featuresInput) => {

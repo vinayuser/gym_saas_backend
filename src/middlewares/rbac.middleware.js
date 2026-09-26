@@ -1,4 +1,5 @@
 import { ForbiddenError } from '../utils/errors.js';
+import { permissionSlugsForUser } from '../services/PlatformAdminService.js';
 
 const ROLE_HIERARCHY = {
   SUPER_ADMIN: 100,
@@ -82,6 +83,22 @@ const ROLE_PERMISSIONS = {
     PERMISSIONS.ATTENDANCE_READ,
   ],
   MEMBER: [PERMISSIONS.MEMBER_READ],
+};
+
+/** Super admin passes. A sub-admin must hold at least one of the given platform permissions. */
+export const requirePlatform = (...needed) => async (req, _res, next) => {
+  try {
+    if (!req.user) return next(new ForbiddenError('Authentication required'));
+    if (req.user.role === 'SUPER_ADMIN') return next();
+    if (req.user.role !== 'PLATFORM_ADMIN') {
+      return next(new ForbiddenError('Insufficient permissions'));
+    }
+    const slugs = new Set(await permissionSlugsForUser(req.user));
+    if (needed.some((slug) => slugs.has(slug))) return next();
+    return next(new ForbiddenError('Insufficient permissions'));
+  } catch (err) {
+    next(err);
+  }
 };
 
 export const requirePermission = (permission) => (req, _res, next) => {

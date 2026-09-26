@@ -12,6 +12,7 @@ import {
   NotFoundError,
 } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
+import { getCatalog } from './PlatformBillingService.js';
 
 const slugify = (text) =>
   text
@@ -65,8 +66,13 @@ export const listInvites = async (query) => {
 };
 
 export const createInvite = async (userId, body) => {
-  const plan = await prisma.subscriptionPlan.findUnique({ where: { id: body.planId } });
-  if (!plan) throw new BadRequestError('Invalid subscription plan');
+  const plan = body.planId
+    ? await prisma.subscriptionPlan.findUnique({ where: { id: body.planId } })
+    : await prisma.subscriptionPlan.findFirst({
+        where: { isActive: true },
+        orderBy: { priceMonthly: 'asc' },
+      });
+  if (!plan) throw new BadRequestError('No subscription plan is configured');
 
   const email = body.email.trim().toLowerCase();
   const existingOwner = await prisma.user.findFirst({
@@ -141,6 +147,7 @@ export const getPublicInvite = async (token) => {
 
   assertInviteUsable(invite);
 
+  const catalog = await getCatalog();
   const payload = {
     id: invite.id,
     email: invite.email,
@@ -148,7 +155,17 @@ export const getPublicInvite = async (token) => {
     businessName: invite.businessName,
     status: invite.status,
     expiresAt: invite.expiresAt,
-    plan: invite.plan,
+    plan: {
+      ...invite.plan,
+      name: catalog.baseName,
+      priceMonthly: catalog.basePriceMonthly,
+    },
+    billing: {
+      baseName: catalog.baseName,
+      basePriceMonthly: catalog.basePriceMonthly,
+      extraGymPriceMonthly: catalog.extraGymPriceMonthly,
+      addons: catalog.addons,
+    },
     paymentPending: invite.status === 'PAYMENT_PENDING',
   };
 
@@ -160,13 +177,36 @@ export const getPublicInvite = async (token) => {
   return payload;
 };
 
+const lockedBusinessName = (invite) => {
+  const name = invite.businessName?.trim();
+  if (!name) {
+    throw new BadRequestError('This invite has no gym name. Ask the platform team to set it.');
+  }
+  return name;
+};
+
+const selectedAddonQuote = (catalog, addonKeys) => {
+  const active = catalog.addons.filter((addon) => addon.isActive);
+  const allowed = new Set(active.map((addon) => addon.key));
+  const selected = [...new Set((addonKeys || []).filter((key) => allowed.has(key)))];
+  const addonTotal = active
+    .filter((addon) => selected.includes(addon.key))
+    .reduce((sum, addon) => sum + addon.pricePerGymMonthly, 0);
+  return {
+    addonKeys: selected,
+    amountInr: catalog.basePriceMonthly + addonTotal,
+  };
+};
+
 const buildOnboardingData = (invite, body) => {
+  const businessName = lockedBusinessName(invite);
+
   if (invite.status === 'PAYMENT_PENDING' && invite.onboardingData) {
     const existing = invite.onboardingData;
     return {
       ...existing,
+      businessName,
       ...(body.password?.length >= 8 ? { password: body.password } : {}),
-      ...(body.businessName?.trim() ? { businessName: body.businessName.trim() } : {}),
       description: body.description ?? existing.description ?? '',
       contactPhones: body.contactPhones?.filter(Boolean) ?? existing.contactPhones ?? [],
       supportEmails: body.supportEmails?.filter(Boolean) ?? existing.supportEmails ?? [],
@@ -177,6 +217,7 @@ const buildOnboardingData = (invite, body) => {
       logoUrl: body.logoUrl ?? existing.logoUrl ?? null,
       videoUrl: body.videoUrl ?? existing.videoUrl ?? null,
       photoUrls: body.photoUrls ?? existing.photoUrls ?? [],
+      addonKeys: body.addonKeys ?? existing.addonKeys ?? [],
       firstName: body.firstName ?? existing.firstName ?? invite.inviteeName?.split(/\s+/)[0] ?? 'Owner',
       lastName: body.lastName ?? existing.lastName ?? invite.inviteeName?.split(/\s+/).slice(1).join(' ') ?? '',
     };
@@ -185,13 +226,10 @@ const buildOnboardingData = (invite, body) => {
   if (!body.password || body.password.length < 8) {
     throw new BadRequestError('Password must be at least 8 characters');
   }
-  if (!body.businessName?.trim()) {
-    throw new BadRequestError('Business name is required');
-  }
 
   return {
     password: body.password,
-    businessName: body.businessName.trim(),
+    businessName,
     description: body.description || '',
     contactPhones: (body.contactPhones || []).filter(Boolean),
     supportEmails: (body.supportEmails || []).filter(Boolean),
@@ -202,6 +240,7 @@ const buildOnboardingData = (invite, body) => {
     logoUrl: body.logoUrl || null,
     videoUrl: body.videoUrl || null,
     photoUrls: body.photoUrls || [],
+    addonKeys: body.addonKeys || [],
     firstName: body.firstName || invite.inviteeName?.split(/\s+/)[0] || 'Owner',
     lastName: body.lastName || invite.inviteeName?.split(/\s+/).slice(1).join(' ') || '',
   };
@@ -211,11 +250,19 @@ export const createCheckout = async (token, body) => {
   const invite = await InviteModel.findByToken(token);
   assertInviteUsable(invite);
 
-  const onboardingData = buildOnboardingData(invite, body);
-  const amountInr = Number(invite.plan.priceMonthly);
+  const draft = buildOnboardingData(invite, body);
+  const catalog = await getCatalog();
+  const quote = selectedAddonQuote(catalog, draft.addonKeys);
+  const onboardingData = { ...draft, addonKeys: quote.addonKeys, amountInr: quote.amountInr };
+  const amountInr = quote.amountInr;
 
-  // Reuse an open order so a retried payment still matches the invite record.
-  if (invite.status === 'PAYMENT_PENDING' && invite.razorpayOrderId) {
+  const sameOrder =
+    invite.status === 'PAYMENT_PENDING' &&
+    invite.razorpayOrderId &&
+    Number(invite.onboardingData?.amountInr) === amountInr;
+
+  // Reuse an open order only when the amount has not changed.
+  if (sameOrder) {
     await InviteModel.update(invite.id, { onboardingData });
 
     return {
@@ -225,7 +272,7 @@ export const createCheckout = async (token, body) => {
       keyId: RazorpayService.getPublicKey(),
       mock: !RazorpayService.isConfigured(),
       inviteEmail: invite.email,
-      planName: invite.plan.name,
+      planName: catalog.baseName,
       amountInr,
     };
   }
@@ -250,7 +297,7 @@ export const createCheckout = async (token, body) => {
     keyId: RazorpayService.getPublicKey(),
     mock: Boolean(order.mock),
     inviteEmail: invite.email,
-    planName: invite.plan.name,
+    planName: catalog.baseName,
     amountInr,
   };
 };
@@ -378,13 +425,22 @@ export const verifyPaymentAndProvision = async (token, body) => {
     await tx.saasPayment.create({
       data: {
         subscriptionId: subscription.id,
-        amount: invite.plan.priceMonthly,
+        amount: onboarding.amountInr ?? invite.plan.priceMonthly,
         currency: 'INR',
         status: 'COMPLETED',
         provider: 'razorpay',
         providerRef: paymentId,
         paidAt: new Date(),
       },
+    });
+
+    const addonFlags = {
+      attendance: false,
+      store: false,
+      day_pass: false,
+    };
+    (onboarding.addonKeys || []).forEach((key) => {
+      if (key in addonFlags) addonFlags[key] = true;
     });
 
     const gym = await tx.gym.create({
@@ -402,6 +458,7 @@ export const verifyPaymentAndProvision = async (token, body) => {
         logo: onboarding.logoUrl,
         images: onboarding.photoUrls || [],
         qrCodeSecret: uuidv4(),
+        commercialAddons: addonFlags,
         operatingHours: onboarding.videoUrl
           ? { promoVideoUrl: onboarding.videoUrl }
           : undefined,
@@ -431,3 +488,348 @@ export const verifyPaymentAndProvision = async (token, body) => {
 };
 
 export const getInviteLink = (token) => `${env.frontendUrl}/setup/${token}`;
+
+const money = (value) => (value == null ? null : Number(value));
+const fullName = (first, last) => `${first || ''} ${last || ''}`.trim();
+const ROW_LIMIT = 100;
+
+const loadGymSnapshot = async (gym) => {
+  const gymId = gym.id;
+  const memberWhere = { gymId, deletedAt: null };
+
+  const [
+    memberCount,
+    staffCount,
+    trainerCount,
+    planCount,
+    activeMemberships,
+    paymentCount,
+    invoiceCount,
+    orderCount,
+    attendanceCount,
+    eventCount,
+    leadCount,
+    productCount,
+    bannerCount,
+    members,
+    staff,
+    trainers,
+    plans,
+    payments,
+    invoices,
+    orders,
+    attendance,
+    events,
+    leads,
+    products,
+    banners,
+    branches,
+  ] = await Promise.all([
+    prisma.member.count({ where: memberWhere }),
+    prisma.gymStaff.count({ where: { gymId } }),
+    prisma.trainer.count({ where: { gymId } }),
+    prisma.gymMembershipPlan.count({ where: { gymId, deletedAt: null } }),
+    prisma.membership.count({ where: { gymId, status: 'ACTIVE' } }),
+    prisma.memberPayment.count({ where: { membership: { gymId } } }),
+    prisma.invoice.count({ where: { gymId } }),
+    prisma.sale.count({ where: { gymId } }),
+    prisma.attendance.count({ where: { gymId } }),
+    prisma.event.count({ where: { gymId } }),
+    prisma.enquiry.count({ where: { gymId } }),
+    prisma.product.count({ where: { gymId, deletedAt: null } }),
+    prisma.banner.count({ where: { gymId, deletedAt: null } }),
+    prisma.member.findMany({
+      where: memberWhere,
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: {
+        id: true,
+        memberCode: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        isActive: true,
+        joinedAt: true,
+      },
+    }),
+    prisma.gymStaff.findMany({
+      where: { gymId },
+      orderBy: { joinedAt: 'desc' },
+      take: ROW_LIMIT,
+      select: {
+        id: true,
+        designation: true,
+        isActive: true,
+        joinedAt: true,
+        user: { select: { firstName: true, lastName: true, email: true, phone: true, role: true, status: true } },
+      },
+    }),
+    prisma.trainer.findMany({
+      where: { gymId },
+      take: ROW_LIMIT,
+      select: {
+        id: true,
+        specialties: true,
+        experience: true,
+        isActive: true,
+        user: { select: { firstName: true, lastName: true, email: true, phone: true } },
+      },
+    }),
+    prisma.gymMembershipPlan.findMany({
+      where: { gymId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, name: true, price: true, billingCycle: true, durationDays: true, isActive: true },
+    }),
+    prisma.memberPayment.findMany({
+      where: { membership: { gymId } },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: {
+        id: true,
+        amount: true,
+        status: true,
+        method: true,
+        paidAt: true,
+        createdAt: true,
+        membership: { select: { member: { select: { firstName: true, lastName: true } } } },
+      },
+    }),
+    prisma.invoice.findMany({
+      where: { gymId },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, invoiceNumber: true, totalAmount: true, status: true, issuedAt: true, paidAt: true },
+    }),
+    prisma.sale.findMany({
+      where: { gymId },
+      orderBy: { soldAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, orderNumber: true, totalAmount: true, status: true, fulfillmentStatus: true, soldAt: true },
+    }),
+    prisma.attendance.findMany({
+      where: { gymId },
+      orderBy: { checkInAt: 'desc' },
+      take: ROW_LIMIT,
+      select: {
+        id: true,
+        type: true,
+        source: true,
+        checkInAt: true,
+        checkOutAt: true,
+        member: { select: { firstName: true, lastName: true } },
+      },
+    }),
+    prisma.event.findMany({
+      where: { gymId },
+      orderBy: { startAt: 'asc' },
+      take: 500,
+      select: {
+        id: true,
+        title: true,
+        type: true,
+        description: true,
+        imageUrl: true,
+        startAt: true,
+        endAt: true,
+        location: true,
+        price: true,
+        seatLimit: true,
+        isActive: true,
+      },
+    }),
+    prisma.enquiry.findMany({
+      where: { gymId },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, name: true, lastName: true, email: true, phone: true, status: true, source: true, createdAt: true },
+    }),
+    prisma.product.findMany({
+      where: { gymId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, name: true, sku: true, price: true, stockQty: true, isActive: true },
+    }),
+    prisma.banner.findMany({
+      where: { gymId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+      select: { id: true, name: true, placement: true, status: true, isActive: true, impressions: true, clicks: true },
+    }),
+    prisma.gymBranch.findMany({
+      where: { gymId },
+      select: { id: true, name: true, address: true, phone: true, isActive: true },
+    }),
+  ]);
+
+  return {
+    id: gym.id,
+    name: gym.name,
+    slug: gym.slug,
+    logo: gym.logo,
+    email: gym.email,
+    phone: gym.phone,
+    address: gym.address,
+    city: gym.city,
+    state: gym.state,
+    country: gym.country,
+    pincode: gym.pincode,
+    appAlias: gym.appAlias,
+    appPublished: gym.appPublished,
+    isActive: gym.isActive,
+    commercialAddons: gym.commercialAddons,
+    dayPassPrice: money(gym.dayPassPrice),
+    counts: {
+      members: memberCount,
+      staff: staffCount,
+      trainers: trainerCount,
+      plans: planCount,
+      activeMemberships,
+      payments: paymentCount,
+      invoices: invoiceCount,
+      orders: orderCount,
+      attendance: attendanceCount,
+      events: eventCount,
+      leads: leadCount,
+      products: productCount,
+      banners: bannerCount,
+      branches: branches.length,
+    },
+    branches,
+    members: members.map((m) => ({
+      id: m.id,
+      memberCode: m.memberCode,
+      name: fullName(m.firstName, m.lastName),
+      email: m.email,
+      phone: m.phone,
+      isActive: m.isActive,
+      joinedAt: m.joinedAt,
+    })),
+    staff: staff.map((s) => ({
+      id: s.id,
+      name: fullName(s.user?.firstName, s.user?.lastName),
+      email: s.user?.email,
+      phone: s.user?.phone,
+      role: s.user?.role,
+      status: s.user?.status,
+      designation: s.designation,
+      isActive: s.isActive,
+      joinedAt: s.joinedAt,
+    })),
+    trainers: trainers.map((t) => ({
+      id: t.id,
+      name: fullName(t.user?.firstName, t.user?.lastName),
+      email: t.user?.email,
+      phone: t.user?.phone,
+      specialties: t.specialties,
+      experience: t.experience,
+      isActive: t.isActive,
+    })),
+    plans: plans.map((p) => ({ ...p, price: money(p.price) })),
+    payments: payments.map((p) => ({
+      id: p.id,
+      amount: money(p.amount),
+      status: p.status,
+      method: p.method,
+      paidAt: p.paidAt,
+      createdAt: p.createdAt,
+      member: fullName(p.membership?.member?.firstName, p.membership?.member?.lastName),
+    })),
+    invoices: invoices.map((i) => ({ ...i, totalAmount: money(i.totalAmount) })),
+    orders: orders.map((o) => ({ ...o, totalAmount: money(o.totalAmount) })),
+    attendance: attendance.map((a) => ({
+      id: a.id,
+      type: a.type,
+      source: a.source,
+      checkInAt: a.checkInAt,
+      checkOutAt: a.checkOutAt,
+      member: fullName(a.member?.firstName, a.member?.lastName),
+    })),
+    events: events.map((e) => ({ ...e, price: money(e.price) })),
+    leads: leads.map((l) => ({
+      id: l.id,
+      name: fullName(l.name, l.lastName),
+      email: l.email,
+      phone: l.phone,
+      status: l.status,
+      source: l.source,
+      createdAt: l.createdAt,
+    })),
+    products: products.map((p) => ({ ...p, price: money(p.price) })),
+    banners,
+  };
+};
+
+export const getBusinessOverview = async (inviteId) => {
+  const invite = await InviteModel.findById(inviteId);
+  if (!invite) throw new NotFoundError('Invite not found');
+
+  const tenant = invite.tenant;
+  let payments = [];
+  if (tenant?.subscription) {
+    const rows = await prisma.saasPayment.findMany({
+      where: { subscriptionId: tenant.subscription.id },
+      orderBy: { createdAt: 'desc' },
+      take: ROW_LIMIT,
+    });
+    payments = rows.map((row) => ({
+      id: row.id,
+      amount: money(row.amount),
+      currency: row.currency,
+      status: row.status,
+      provider: row.provider,
+      paidAt: row.paidAt,
+      createdAt: row.createdAt,
+    }));
+  }
+
+  const gyms = tenant
+    ? await prisma.gym.findMany({
+        where: { tenantId: tenant.id, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+      })
+    : [];
+
+  const snapshots = [];
+  for (const gym of gyms) {
+    snapshots.push(await loadGymSnapshot(gym));
+  }
+
+  return {
+    invite: {
+      id: invite.id,
+      email: invite.email,
+      inviteeName: invite.inviteeName,
+      businessName: invite.businessName,
+      note: invite.note,
+      status: invite.status,
+      expiresAt: invite.expiresAt,
+      sentAt: invite.sentAt,
+      acceptedAt: invite.acceptedAt,
+      createdAt: invite.createdAt,
+      planName: invite.plan?.name || null,
+    },
+    business: tenant
+      ? {
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          email: tenant.email,
+          phone: tenant.phone,
+          logo: tenant.logo,
+          isActive: tenant.isActive,
+          createdAt: tenant.createdAt,
+          owner: tenant.owner,
+          subscription: tenant.subscription
+            ? {
+                status: tenant.subscription.status,
+                plan: tenant.subscription.plan,
+              }
+            : null,
+          payments,
+        }
+      : null,
+    gyms: snapshots,
+  };
+};
