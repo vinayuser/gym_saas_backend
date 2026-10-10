@@ -1,16 +1,14 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: gym-saas-postgres
+  mongo:
+    image: mongo:7
+    container_name: gym-saas-mongo
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-gym_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
-      POSTGRES_DB: ${POSTGRES_DB:-gym_saas}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-gym_saas}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mongo_data:/data/db
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-gym_user} -d ${POSTGRES_DB:-gym_saas}']
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -33,7 +31,7 @@ services:
     container_name: gym-saas-backend
     restart: unless-stopped
     depends_on:
-      postgres:
+      mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -43,9 +41,9 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-gym_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-gym_saas}?schema=public
+      MONGODB_URI: mongodb://mongo:27017/${MONGO_DB:-gym_saas}
       REDIS_URL: redis://redis:6379
 
 volumes:
-  postgres_data:
+  mongo_data:
   redis_data:
