@@ -1,5 +1,12 @@
-import prisma from '../config/database.js';
+import {
+  MemberPayment,
+  Membership,
+  Sale,
+  Invoice,
+} from '../schemas/index.js';
 import * as GymModel from '../models/GymModel.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS } from '../helpers/constants.js';
 import { NotFoundError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
@@ -17,171 +24,283 @@ const parseCategory = (query) => {
 
 const isFinanceExport = (query) => query?.export === true || query?.export === 'true' || query?.export === '1';
 
-const paginateList = (items, query) => {
-  const total = items.length;
-  if (isFinanceExport(query)) {
-    return {
-      items,
-      pagination: buildPaginationMeta(total, 1, total || 1),
-    };
+const saleMatch = (gymId) => ({
+  gymId,
+  status: 'COMPLETED',
+  fulfillmentStatus: { $ne: 'CANCELLED' },
+});
+
+const PENDING_STATUSES = ['PENDING', 'ISSUED', 'DRAFT', 'PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'];
+
+const nameConcat = (first, last) => ({
+  $trim: { input: { $concat: [{ $ifNull: [first, ''] }, ' ', { $ifNull: [last, ''] }] } },
+});
+
+const paymentEntryPipeline = (gymId) => [
+  ...lookupOne(COLLECTIONS.MEMBERSHIPS, 'membershipId', 'membership'),
+  { $match: { $or: [{ gymId }, { 'membership.gymId': gymId }] } },
+  ...lookupOne(COLLECTIONS.MEMBERS, 'membership.memberId', 'member', {
+    firstName: 1,
+    lastName: 1,
+    memberCode: 1,
+  }),
+  ...lookupOne(COLLECTIONS.GYM_MEMBERSHIP_PLANS, 'membership.planId', 'plan', { name: 1 }),
+  {
+    $project: {
+      _id: 0,
+      id: '$_id',
+      source: { $literal: 'SUBSCRIPTIONS' },
+      date: { $ifNull: ['$paidAt', '$createdAt'] },
+      label: {
+        $trim: {
+          input: {
+            $concat: [
+              { $ifNull: ['$plan.name', 'Membership'] },
+              ' — ',
+              { $ifNull: ['$member.firstName', ''] },
+              ' ',
+              { $ifNull: ['$member.lastName', ''] },
+            ],
+          },
+        },
+      },
+      refId: { $ifNull: ['$providerRef', { $toUpper: { $substrCP: ['$_id', 0, 8] } }] },
+      amount: { $ifNull: ['$amount', 0] },
+      status: 1,
+      method: { $ifNull: ['$method', 'UPI'] },
+      memberName: nameConcat('$member.firstName', '$member.lastName'),
+      memberCode: '$member.memberCode',
+      planName: '$plan.name',
+      type: { $literal: 'payment' },
+    },
+  },
+];
+
+const syntheticMembershipPipeline = (gymId) => [
+  { $match: { gymId, amountPaid: { $ne: null } } },
+  {
+    $lookup: {
+      from: COLLECTIONS.MEMBER_PAYMENTS,
+      localField: '_id',
+      foreignField: 'membershipId',
+      as: 'payments',
+    },
+  },
+  { $match: { payments: { $eq: [] } } },
+  ...lookupOne(COLLECTIONS.MEMBERS, 'memberId', 'member', { firstName: 1, lastName: 1, memberCode: 1 }),
+  ...lookupOne(COLLECTIONS.GYM_MEMBERSHIP_PLANS, 'planId', 'plan', { name: 1 }),
+  {
+    $project: {
+      _id: 0,
+      id: { $concat: ['membership-', '$_id'] },
+      source: { $literal: 'SUBSCRIPTIONS' },
+      date: '$createdAt',
+      label: {
+        $trim: {
+          input: {
+            $concat: [
+              { $ifNull: ['$plan.name', 'Membership'] },
+              ' — ',
+              { $ifNull: ['$member.firstName', ''] },
+              ' ',
+              { $ifNull: ['$member.lastName', ''] },
+            ],
+          },
+        },
+      },
+      refId: '$member.memberCode',
+      amount: { $ifNull: ['$amountPaid', 0] },
+      status: { $literal: 'COMPLETED' },
+      method: { $literal: 'CASH' },
+      memberName: nameConcat('$member.firstName', '$member.lastName'),
+      memberCode: '$member.memberCode',
+      planName: '$plan.name',
+      type: { $literal: 'membership' },
+    },
+  },
+];
+
+const storeEntryPipeline = (gymId) => [
+  { $match: saleMatch(gymId) },
+  ...lookupOne(COLLECTIONS.MEMBERS, 'memberId', 'member', { firstName: 1, lastName: 1, memberCode: 1 }),
+  {
+    $lookup: {
+      from: COLLECTIONS.SALE_ITEMS,
+      let: { sid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$saleId', '$$sid'] } } },
+        {
+          $lookup: {
+            from: COLLECTIONS.PRODUCTS,
+            localField: 'productId',
+            foreignField: '_id',
+            as: 'product',
+          },
+        },
+        { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+      ],
+      as: 'items',
+    },
+  },
+  {
+    $project: {
+      _id: 0,
+      id: '$_id',
+      source: { $literal: 'STORE_SALES' },
+      date: '$soldAt',
+      label: {
+        $concat: [
+          'Store order ',
+          { $ifNull: ['$orderNumber', { $toUpper: { $substrCP: ['$_id', 0, 8] } }] },
+          {
+            $cond: [
+              { $ifNull: ['$member.firstName', false] },
+              {
+                $concat: [' — ', { $ifNull: ['$member.firstName', ''] }, ' ', { $ifNull: ['$member.lastName', ''] }],
+              },
+              '',
+            ],
+          },
+        ],
+      },
+      refId: { $ifNull: ['$orderNumber', { $toUpper: { $substrCP: ['$_id', 0, 8] } }] },
+      amount: { $ifNull: ['$totalAmount', 0] },
+      status: '$fulfillmentStatus',
+      method: { $literal: 'STORE' },
+      memberName: {
+        $cond: [
+          { $ifNull: ['$member.firstName', false] },
+          nameConcat('$member.firstName', '$member.lastName'),
+          'Walk-in',
+        ],
+      },
+      memberCode: '$member.memberCode',
+      planName: { $literal: null },
+      type: { $literal: 'store_order' },
+      itemCount: { $sum: '$items.quantity' },
+      products: {
+        $filter: {
+          input: { $map: { input: '$items', as: 'i', in: '$$i.product.name' } },
+          as: 'n',
+          cond: { $and: [{ $ne: ['$$n', null] }, { $ne: ['$$n', ''] }] },
+        },
+      },
+    },
+  },
+];
+
+const invoiceEntryPipeline = (gymId) => [
+  { $match: { gymId } },
+  {
+    $project: {
+      _id: 0,
+      id: '$_id',
+      source: { $literal: 'INVOICES' },
+      date: { $ifNull: ['$paidAt', { $ifNull: ['$issuedAt', '$createdAt'] }] },
+      label: { $concat: ['Invoice ', '$invoiceNumber'] },
+      refId: '$invoiceNumber',
+      amount: { $ifNull: ['$totalAmount', 0] },
+      status: 1,
+      method: { $literal: 'INVOICE' },
+      memberName: { $literal: null },
+      memberCode: { $literal: null },
+      planName: { $literal: null },
+      type: { $literal: 'invoice' },
+    },
+  },
+];
+
+const sourcesFor = (gymId, category) => {
+  const sources = [];
+  if (category === 'ALL' || category === 'SUBSCRIPTIONS') {
+    sources.push({ Model: MemberPayment, coll: COLLECTIONS.MEMBER_PAYMENTS, pipeline: paymentEntryPipeline(gymId) });
+    sources.push({ Model: Membership, coll: COLLECTIONS.MEMBERSHIPS, pipeline: syntheticMembershipPipeline(gymId) });
   }
+  if (category === 'ALL' || category === 'STORE_SALES') {
+    sources.push({ Model: Sale, coll: COLLECTIONS.SALES, pipeline: storeEntryPipeline(gymId) });
+  }
+  if (category === 'ALL' || category === 'INVOICES') {
+    sources.push({ Model: Invoice, coll: COLLECTIONS.INVOICES, pipeline: invoiceEntryPipeline(gymId) });
+  }
+  return sources;
+};
+
+const unionAggregate = (gymId, category, extra = []) => {
+  const sources = sourcesFor(gymId, category);
+  const [first, ...rest] = sources;
+  return first.Model.aggregate([
+    ...first.pipeline,
+    ...rest.map((s) => ({ $unionWith: { coll: s.coll, pipeline: s.pipeline } })),
+    ...extra,
+  ]);
+};
+
+const facetPage = async (gymId, category, query, extra = []) => {
+  const exportAll = isFinanceExport(query);
   const pagination = parsePagination(query);
+  const skip = exportAll ? 0 : pagination.skip;
+  const limit = exportAll ? 10000 : pagination.limit;
+  const [out] = await unionAggregate(gymId, category, [
+    ...extra,
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: Math.max(limit, 1) }],
+        meta: [{ $count: 'total' }],
+      },
+    },
+  ]);
+  const total = out?.meta?.[0]?.total ?? 0;
   return {
-    items: items.slice(pagination.skip, pagination.skip + pagination.limit),
-    pagination: buildPaginationMeta(total, pagination.page, pagination.limit),
+    items: out?.data || [],
+    pagination: buildPaginationMeta(
+      total,
+      exportAll ? 1 : pagination.page,
+      exportAll ? total || 1 : pagination.limit
+    ),
   };
 };
 
-const num = (v) => Number(v || 0);
-
-const gstFromAmount = (amount, rate = 0.18) => Math.round(amount * rate * 100) / 100;
-
-const saleWhere = (gymId) => ({
-  gymId,
-  status: 'COMPLETED',
-  fulfillmentStatus: { not: 'CANCELLED' },
-});
-
-const fetchSubscriptionEntries = async (gymId) => {
-  const payments = await prisma.memberPayment.findMany({
-    where: { membership: { gymId } },
-    include: { membership: { include: { member: true, plan: true } } },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  const paymentEntries = payments.map((p) => ({
-    id: p.id,
-    source: 'SUBSCRIPTIONS',
-    date: p.paidAt || p.createdAt,
-    label: `${p.membership?.plan?.name || 'Membership'} — ${p.membership?.member?.firstName || ''} ${p.membership?.member?.lastName || ''}`.trim(),
-    refId: p.providerRef || p.id.slice(0, 8).toUpperCase(),
-    amount: num(p.amount),
-    status: p.status,
-    method: p.method || 'UPI',
-    memberName: p.membership?.member
-      ? `${p.membership.member.firstName} ${p.membership.member.lastName}`.trim()
-      : null,
-    memberCode: p.membership?.member?.memberCode,
-    planName: p.membership?.plan?.name,
-    type: 'payment',
-  }));
-
-  const membershipsWithoutPayments = await prisma.membership.findMany({
-    where: {
-      gymId,
-      amountPaid: { not: null },
-      payments: { none: {} },
-    },
-    include: { member: true, plan: true },
-  });
-
-  const syntheticEntries = membershipsWithoutPayments.map((m) => ({
-    id: `membership-${m.id}`,
-    source: 'SUBSCRIPTIONS',
-    date: m.createdAt,
-    label: `${m.plan?.name || 'Membership'} — ${m.member.firstName} ${m.member.lastName}`.trim(),
-    refId: m.member.memberCode,
-    amount: num(m.amountPaid),
-    status: 'COMPLETED',
-    method: 'CASH',
-    memberName: `${m.member.firstName} ${m.member.lastName}`.trim(),
-    memberCode: m.member.memberCode,
-    planName: m.plan?.name,
-    type: 'membership',
-  }));
-
-  return [...paymentEntries, ...syntheticEntries];
+const sumMatch = async (Model, match, field) => {
+  const [row] = await Model.aggregate([
+    { $match: match },
+    { $group: { _id: null, total: { $sum: `$${field}` }, count: { $sum: 1 } } },
+  ]);
+  return { total: row?.total ?? 0, count: row?.count ?? 0 };
 };
 
-const fetchStoreEntries = async (gymId) => {
-  const sales = await prisma.sale.findMany({
-    where: saleWhere(gymId),
-    include: {
-      member: { select: { firstName: true, lastName: true, memberCode: true } },
-      items: { include: { product: { select: { name: true } } } },
-    },
-    orderBy: { soldAt: 'desc' },
-  });
-
-  return sales.map((s) => ({
-    id: s.id,
-    source: 'STORE_SALES',
-    date: s.soldAt,
-    label: `Store order ${s.orderNumber || s.id.slice(0, 8).toUpperCase()}${s.member ? ` — ${s.member.firstName} ${s.member.lastName}` : ''}`,
-    refId: s.orderNumber || s.id.slice(0, 8).toUpperCase(),
-    amount: num(s.totalAmount),
-    status: s.fulfillmentStatus,
-    method: 'STORE',
-    memberName: s.member ? `${s.member.firstName} ${s.member.lastName}`.trim() : 'Walk-in',
-    memberCode: s.member?.memberCode,
-    planName: null,
-    type: 'store_order',
-    itemCount: s.items?.reduce((sum, i) => sum + i.quantity, 0) ?? 0,
-    products: s.items?.map((i) => i.product?.name).filter(Boolean),
-  }));
+const subscriptionTotals = async (gymId) => {
+  const [payments, synthetic] = await Promise.all([
+    MemberPayment.aggregate([
+      ...lookupOne(COLLECTIONS.MEMBERSHIPS, 'membershipId', 'membership', { gymId: 1 }),
+      { $match: { $or: [{ gymId }, { 'membership.gymId': gymId }], status: 'COMPLETED' } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Membership.aggregate([
+      { $match: { gymId, amountPaid: { $ne: null } } },
+      {
+        $lookup: {
+          from: COLLECTIONS.MEMBER_PAYMENTS,
+          localField: '_id',
+          foreignField: 'membershipId',
+          as: 'payments',
+        },
+      },
+      { $match: { payments: { $eq: [] } } },
+      { $group: { _id: null, total: { $sum: '$amountPaid' }, count: { $sum: 1 } } },
+    ]),
+  ]);
+  const paymentCount = await MemberPayment.aggregate([
+    ...lookupOne(COLLECTIONS.MEMBERSHIPS, 'membershipId', 'membership', { gymId: 1 }),
+    { $match: { $or: [{ gymId }, { 'membership.gymId': gymId }] } },
+    { $count: 'n' },
+  ]);
+  return {
+    revenue: Number(payments[0]?.total || 0) + Number(synthetic[0]?.total || 0),
+    count: (paymentCount[0]?.n || 0) + (synthetic[0]?.count || 0),
+  };
 };
 
-const fetchInvoiceEntries = async (gymId) => {
-  const invoices = await prisma.invoice.findMany({
-    where: { gymId },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  return invoices.map((i) => ({
-    id: i.id,
-    source: 'INVOICES',
-    date: i.paidAt || i.issuedAt || i.createdAt,
-    label: `Invoice ${i.invoiceNumber}`,
-    refId: i.invoiceNumber,
-    amount: num(i.totalAmount),
-    status: i.status,
-    method: 'INVOICE',
-    memberName: null,
-    memberCode: null,
-    planName: null,
-    type: 'invoice',
-  }));
-};
-
-const filterByCategory = (entries, category) => {
-  if (category === 'ALL') return entries;
-  return entries.filter((e) => e.source === category);
-};
-
-const completedAmount = (entries) =>
-  entries
-    .filter((e) => e.status === 'COMPLETED' || e.status === 'PAID' || e.status === 'COLLECTED' || e.type === 'store_order' || e.type === 'membership')
-    .reduce((s, e) => s + e.amount, 0);
-
-const pendingAmount = (entries) =>
-  entries
-    .filter((e) => ['PENDING', 'ISSUED', 'DRAFT', 'PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'].includes(e.status))
-    .reduce((s, e) => s + e.amount, 0);
-
-const buildWeeklyTrend = (entries, weeks = 8) => {
-  const now = new Date();
-  const buckets = [];
-
-  for (let i = weeks - 1; i >= 0; i -= 1) {
-    const start = new Date(now);
-    start.setDate(start.getDate() - i * 7);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
-
-    const total = entries
-      .filter((e) => {
-        const d = new Date(e.date);
-        return d >= start && d < end;
-      })
-      .reduce((s, e) => s + e.amount, 0);
-
-    buckets.push({
-      label: `W${weeks - i}`,
-      amount: total,
-    });
-  }
-
+const buildWeeklyTrend = (buckets, weeks = 8) => {
   const max = Math.max(...buckets.map((b) => b.amount), 1);
   return buckets.map((b) => ({ ...b, pct: Math.round((b.amount / max) * 100) }));
 };
@@ -189,19 +308,52 @@ const buildWeeklyTrend = (entries, weeks = 8) => {
 export const overview = async (tenantId, gymId, query = {}) => {
   await validateGym(tenantId, gymId);
   const category = parseCategory(query);
+  const weeks = 8;
+  const now = new Date();
+  const trendStart = new Date(now);
+  trendStart.setDate(trendStart.getDate() - (weeks - 1) * 7);
+  trendStart.setHours(0, 0, 0, 0);
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
 
-  const [subscriptions, store, invoices] = await Promise.all([
-    fetchSubscriptionEntries(gymId),
-    fetchStoreEntries(gymId),
-    fetchInvoiceEntries(gymId),
+  const [subs, store, invoicesPaid, invoicesOverdue, pendingFacet, trendRows, recent] = await Promise.all([
+    subscriptionTotals(gymId),
+    sumMatch(Sale, saleMatch(gymId), 'totalAmount'),
+    sumMatch(Invoice, { gymId, status: 'PAID' }, 'totalAmount'),
+    sumMatch(Invoice, { gymId, status: 'OVERDUE' }, 'totalAmount'),
+    unionAggregate(gymId, category, [
+      { $match: { status: { $in: PENDING_STATUSES } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    unionAggregate(gymId, category, [
+      { $match: { date: { $gte: trendStart } } },
+      {
+        $group: {
+          _id: { $floor: { $divide: [{ $subtract: ['$date', trendStart] }, weekMs] } },
+          amount: { $sum: '$amount' },
+        },
+      },
+    ]),
+    unionAggregate(gymId, category, [
+      { $sort: { date: -1 } },
+      { $limit: 10 },
+      {
+        $project: {
+          _id: 0,
+          id: 1,
+          type: 1,
+          source: 1,
+          label: 1,
+          amount: 1,
+          status: 1,
+          at: '$date',
+        },
+      },
+    ]),
   ]);
 
-  const allEntries = [...subscriptions, ...store, ...invoices];
-  const filtered = filterByCategory(allEntries, category);
-
-  const subscriptionRevenue = completedAmount(subscriptions);
-  const storeRevenue = completedAmount(store);
-  const invoiceRevenue = invoices.filter((i) => i.status === 'PAID').reduce((s, i) => s + i.amount, 0);
+  const subscriptionRevenue = subs.revenue;
+  const storeRevenue = Number(store.total || 0);
+  const invoiceRevenue = Number(invoicesPaid.total || 0);
 
   const totalRevenue =
     category === 'SUBSCRIPTIONS'
@@ -212,23 +364,14 @@ export const overview = async (tenantId, gymId, query = {}) => {
           ? invoiceRevenue
           : subscriptionRevenue + storeRevenue + invoiceRevenue;
 
-  const pending = pendingAmount(filtered);
-  const overdue = invoices
-    .filter((i) => i.status === 'OVERDUE')
-    .reduce((s, i) => s + i.amount, 0);
-
-  const recent = [...filtered]
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 10)
-    .map((e) => ({
-      id: e.id,
-      type: e.type,
-      source: e.source,
-      label: e.label,
-      amount: e.amount,
-      status: e.status,
-      at: e.date,
-    }));
+  const trendMap = Object.fromEntries(trendRows.map((r) => [r._id, r.amount]));
+  const trend = buildWeeklyTrend(
+    Array.from({ length: weeks }, (_, i) => ({
+      label: `W${i + 1}`,
+      amount: Number(trendMap[i] || 0),
+    })),
+    weeks
+  );
 
   return {
     category,
@@ -236,15 +379,13 @@ export const overview = async (tenantId, gymId, query = {}) => {
     subscriptionRevenue,
     storeRevenue,
     invoiceRevenue,
-    pendingAmount: pending,
-    overdueAmount: overdue,
-    pendingCount: filtered.filter((e) =>
-      ['PENDING', 'ISSUED', 'DRAFT', 'PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'].includes(e.status)
-    ).length,
-    overdueCount: invoices.filter((i) => i.status === 'OVERDUE').length,
-    orderCount: store.length,
-    subscriptionCount: subscriptions.length,
-    trend: buildWeeklyTrend(filtered),
+    pendingAmount: Number(pendingFacet[0]?.total || 0),
+    overdueAmount: Number(invoicesOverdue.total || 0),
+    pendingCount: pendingFacet[0]?.count || 0,
+    overdueCount: invoicesOverdue.count || 0,
+    orderCount: store.count || 0,
+    subscriptionCount: subs.count,
+    trend,
     recent,
   };
 };
@@ -253,36 +394,47 @@ export const ledger = async (tenantId, gymId, query) => {
   await validateGym(tenantId, gymId);
   const category = parseCategory(query);
 
-  const [subscriptions, store, invoices] = await Promise.all([
-    fetchSubscriptionEntries(gymId),
-    fetchStoreEntries(gymId),
-    fetchInvoiceEntries(gymId),
+  const { items, pagination } = await facetPage(gymId, category, query, [
+    {
+      $addFields: {
+        isCredit: {
+          $or: [
+            { $in: ['$status', ['COMPLETED', 'PAID', 'COLLECTED']] },
+            { $in: ['$type', ['store_order', 'membership']] },
+          ],
+        },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        id: 1,
+        date: 1,
+        narration: '$label',
+        refId: 1,
+        debit: { $cond: ['$isCredit', 0, '$amount'] },
+        credit: { $cond: ['$isCredit', '$amount', 0] },
+        gst: {
+          $round: [{ $multiply: [{ $cond: ['$isCredit', '$amount', 0] }, 0.18] }, 2],
+        },
+        method: 1,
+        category: '$source',
+        status: 1,
+      },
+    },
+    { $sort: { date: -1 } },
+    ...(String(query.search || '').trim()
+      ? [
+          {
+            $match: {
+              $or: ['narration', 'refId', 'method'].map((field) => ({
+                [field]: { $regex: String(query.search).trim(), $options: 'i' },
+              })),
+            },
+          },
+        ]
+      : []),
   ]);
-
-  const entries = filterByCategory([...subscriptions, ...store, ...invoices], category)
-    .map((e) => {
-      const isCredit =
-        e.status === 'COMPLETED' ||
-        e.status === 'PAID' ||
-        e.status === 'COLLECTED' ||
-        e.type === 'store_order' ||
-        e.type === 'membership';
-      return {
-        id: e.id,
-        date: e.date,
-        narration: e.label,
-        refId: e.refId,
-        debit: isCredit ? 0 : e.amount,
-        credit: isCredit ? e.amount : 0,
-        gst: gstFromAmount(isCredit ? e.amount : 0),
-        method: e.method,
-        category: e.source,
-        status: e.status,
-      };
-    })
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
-
-  const { items, pagination } = paginateList(entries, query);
 
   return {
     entries: items,
@@ -291,115 +443,213 @@ export const ledger = async (tenantId, gymId, query) => {
   };
 };
 
+const membershipPaymentRows = (gymId) => [
+  { $match: { gymId } },
+  ...lookupOne(COLLECTIONS.MEMBERS, 'memberId', 'member', {
+    firstName: 1,
+    lastName: 1,
+    memberCode: 1,
+  }),
+  ...lookupOne(COLLECTIONS.GYM_MEMBERSHIP_PLANS, 'planId', 'plan', { name: 1 }),
+  {
+    $lookup: {
+      from: COLLECTIONS.MEMBER_PAYMENTS,
+      let: { mid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$membershipId', '$$mid'] } } },
+        { $sort: { createdAt: -1 } },
+        {
+          $project: {
+            _id: 0,
+            id: '$_id',
+            amount: 1,
+            status: 1,
+            method: 1,
+            paidAt: 1,
+            createdAt: 1,
+            membershipId: 1,
+          },
+        },
+      ],
+      as: 'payments',
+    },
+  },
+  {
+    $addFields: {
+      balance: {
+        $sum: {
+          $map: {
+            input: {
+              $filter: { input: '$payments', as: 'p', cond: { $ne: ['$$p.status', 'COMPLETED'] } },
+            },
+            as: 'p',
+            in: '$$p.amount',
+          },
+        },
+      },
+      completedPaid: {
+        $sum: {
+          $map: {
+            input: {
+              $filter: { input: '$payments', as: 'p', cond: { $eq: ['$$p.status', 'COMPLETED'] } },
+            },
+            as: 'p',
+            in: '$$p.amount',
+          },
+        },
+      },
+    },
+  },
+  {
+    $project: {
+      _id: 0,
+      id: '$_id',
+      source: { $literal: 'SUBSCRIPTIONS' },
+      memberId: 1,
+      memberName: nameConcat('$member.firstName', '$member.lastName'),
+      memberCode: '$member.memberCode',
+      planName: '$plan.name',
+      status: 1,
+      balance: 1,
+      totalPaid: { $cond: [{ $gt: ['$completedPaid', 0] }, '$completedPaid', { $ifNull: ['$amountPaid', 0] }] },
+      payments: 1,
+      sortDate: {
+        $ifNull: [{ $arrayElemAt: ['$payments.paidAt', 0] }, { $arrayElemAt: ['$payments.createdAt', 0] }],
+      },
+    },
+  },
+];
+
+const storePaymentRows = (gymId) => [
+  ...storeEntryPipeline(gymId),
+  {
+    $project: {
+      _id: 0,
+      id: 1,
+      source: 1,
+      memberId: { $literal: null },
+      memberName: 1,
+      memberCode: 1,
+      planName: {
+        $cond: [
+          { $gt: [{ $size: { $ifNull: ['$products', []] } }, 0] },
+          {
+            $reduce: {
+              input: '$products',
+              initialValue: '',
+              in: {
+                $cond: [
+                  { $eq: ['$$value', ''] },
+                  '$$this',
+                  { $concat: ['$$value', ', ', '$$this'] },
+                ],
+              },
+            },
+          },
+          'Store purchase',
+        ],
+      },
+      status: 1,
+      balance: {
+        $cond: [{ $in: ['$status', ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP']] }, '$amount', 0],
+      },
+      totalPaid: '$amount',
+      payments: [
+        {
+          id: '$id',
+          amount: '$amount',
+          status: { $literal: 'COMPLETED' },
+          method: { $literal: 'STORE' },
+          paidAt: '$date',
+          createdAt: '$date',
+        },
+      ],
+      sortDate: '$date',
+    },
+  },
+];
+
+const invoicePaymentRows = (gymId) => [
+  ...invoiceEntryPipeline(gymId),
+  {
+    $project: {
+      _id: 0,
+      id: 1,
+      source: 1,
+      memberId: { $literal: null },
+      memberName: '$label',
+      memberCode: '$refId',
+      planName: { $literal: 'Invoice' },
+      status: 1,
+      balance: { $cond: [{ $eq: ['$status', 'PAID'] }, 0, '$amount'] },
+      totalPaid: { $cond: [{ $eq: ['$status', 'PAID'] }, '$amount', 0] },
+      payments: [
+        {
+          id: '$id',
+          amount: '$amount',
+          status: '$status',
+          method: { $literal: 'INVOICE' },
+          paidAt: { $cond: [{ $eq: ['$status', 'PAID'] }, '$date', null] },
+          createdAt: '$date',
+        },
+      ],
+      sortDate: '$date',
+    },
+  },
+];
+
 export const payments = async (tenantId, gymId, query) => {
   await validateGym(tenantId, gymId);
   const category = parseCategory(query);
 
-  const [subscriptions, store] = await Promise.all([
-    fetchSubscriptionEntries(gymId),
-    fetchStoreEntries(gymId),
+  const sources = [];
+  if (category === 'ALL' || category === 'SUBSCRIPTIONS') {
+    sources.push({ Model: Membership, coll: COLLECTIONS.MEMBERSHIPS, pipeline: membershipPaymentRows(gymId) });
+  }
+  if (category === 'ALL' || category === 'STORE_SALES') {
+    sources.push({ Model: Sale, coll: COLLECTIONS.SALES, pipeline: storePaymentRows(gymId) });
+  }
+  if (category === 'INVOICES') {
+    sources.push({ Model: Invoice, coll: COLLECTIONS.INVOICES, pipeline: invoicePaymentRows(gymId) });
+  }
+
+  const exportAll = isFinanceExport(query);
+  const pagination = parsePagination(query);
+  const skip = exportAll ? 0 : pagination.skip;
+  const limit = exportAll ? 10000 : pagination.limit;
+  const [first, ...rest] = sources;
+  const [out] = await first.Model.aggregate([
+    ...first.pipeline,
+    ...rest.map((s) => ({ $unionWith: { coll: s.coll, pipeline: s.pipeline } })),
+    { $sort: { sortDate: -1 } },
+    ...(String(query.search || '').trim()
+      ? [
+          {
+            $match: {
+              $or: ['memberName', 'memberCode', 'planName', 'status'].map((field) => ({
+                [field]: { $regex: String(query.search).trim(), $options: 'i' },
+              })),
+            },
+          },
+        ]
+      : []),
+    {
+      $facet: {
+        data: [{ $skip: skip }, { $limit: Math.max(limit, 1) }, { $project: { sortDate: 0 } }],
+        meta: [{ $count: 'total' }],
+      },
+    },
   ]);
 
-  let rows = [];
-
-  if (category === 'ALL' || category === 'SUBSCRIPTIONS') {
-    const memberships = await prisma.membership.findMany({
-      where: { gymId },
-      include: {
-        member: true,
-        plan: true,
-        payments: { orderBy: { createdAt: 'desc' } },
-      },
-    });
-
-    rows.push(
-      ...memberships.map((m) => ({
-        id: m.id,
-        source: 'SUBSCRIPTIONS',
-        memberId: m.memberId,
-        memberName: `${m.member.firstName} ${m.member.lastName}`.trim(),
-        memberCode: m.member.memberCode,
-        planName: m.plan.name,
-        status: m.status,
-        balance: m.payments
-          .filter((p) => p.status !== 'COMPLETED')
-          .reduce((s, p) => s + num(p.amount), 0),
-        totalPaid:
-          m.payments.filter((p) => p.status === 'COMPLETED').reduce((s, p) => s + num(p.amount), 0) ||
-          num(m.amountPaid),
-        payments: m.payments.map((p) => ({
-          ...p,
-          amount: num(p.amount),
-        })),
-      }))
-    );
-  }
-
-  if (category === 'ALL' || category === 'STORE_SALES') {
-    rows.push(
-      ...store.map((s) => ({
-        id: s.id,
-        source: 'STORE_SALES',
-        memberId: null,
-        memberName: s.memberName,
-        memberCode: s.memberCode,
-        planName: s.products?.join(', ') || 'Store purchase',
-        status: s.status,
-        balance: ['PLACED', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP'].includes(s.status) ? s.amount : 0,
-        totalPaid: s.amount,
-        payments: [
-          {
-            id: s.id,
-            amount: s.amount,
-            status: 'COMPLETED',
-            method: 'STORE',
-            paidAt: s.date,
-            createdAt: s.date,
-          },
-        ],
-      }))
-    );
-  }
-
-  if (category === 'INVOICES') {
-    const invoiceEntries = await fetchInvoiceEntries(gymId);
-    rows.push(
-      ...invoiceEntries.map((i) => ({
-        id: i.id,
-        source: 'INVOICES',
-        memberId: null,
-        memberName: i.label,
-        memberCode: i.refId,
-        planName: 'Invoice',
-        status: i.status,
-        balance: i.status === 'PAID' ? 0 : i.amount,
-        totalPaid: i.status === 'PAID' ? i.amount : 0,
-        payments: [
-          {
-            id: i.id,
-            amount: i.amount,
-            status: i.status,
-            method: 'INVOICE',
-            paidAt: i.status === 'PAID' ? i.date : null,
-            createdAt: i.date,
-          },
-        ],
-      }))
-    );
-  }
-
-  rows.sort((a, b) => {
-    const aDate = a.payments?.[0]?.paidAt || a.payments?.[0]?.createdAt;
-    const bDate = b.payments?.[0]?.paidAt || b.payments?.[0]?.createdAt;
-    return new Date(bDate) - new Date(aDate);
-  });
-
-  const { items, pagination } = paginateList(rows, query);
-
+  const total = out?.meta?.[0]?.total ?? 0;
   return {
-    rows: items,
+    rows: out?.data || [],
     category,
-    pagination,
+    pagination: buildPaginationMeta(
+      total,
+      exportAll ? 1 : pagination.page,
+      exportAll ? total || 1 : pagination.limit
+    ),
   };
 };
 

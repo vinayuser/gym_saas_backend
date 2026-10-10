@@ -21,3 +21,8 @@ export const tenantGyms = asyncHandler(async (req, res) => {
   const data = await PublicGymService.listPublicGymsByTenant(req.params.tenantSlug);
   successResponse(res, data);
 });
+
+export const contact = asyncHandler(async (req, res) => {
+  const data = await PublicGymService.submitContact(req.body);
+  successResponse(res, data, 'Message received', 201);
+});

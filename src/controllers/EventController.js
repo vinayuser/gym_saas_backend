@@ -34,3 +34,28 @@ export const remove = asyncHandler(async (req, res) => {
   const result = await EventService.remove(req.tenantId, req.params.gymId, req.params.eventId);
   successResponse(res, result);
 });
+
+export const listBookings = asyncHandler(async (req, res) => {
+  const data = await EventService.listBookings(req.tenantId, req.params.gymId, req.params.eventId);
+  successResponse(res, data);
+});
+
+export const book = asyncHandler(async (req, res) => {
+  const data = await EventService.bookEvent(
+    req.tenantId,
+    req.params.gymId,
+    req.params.eventId,
+    req.body.memberId
+  );
+  successResponse(res, data, 'Member booked', 201);
+});
+
+export const cancelBooking = asyncHandler(async (req, res) => {
+  const data = await EventService.cancelBooking(
+    req.tenantId,
+    req.params.gymId,
+    req.params.eventId,
+    req.body.memberId || req.params.memberId
+  );
+  successResponse(res, data);
+});

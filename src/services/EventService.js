@@ -1,6 +1,8 @@
 import * as EventModel from '../models/EventModel.js';
+import * as EventBookingModel from '../models/EventBookingModel.js';
 import * as GymModel from '../models/GymModel.js';
-import { NotFoundError, ValidationError } from '../utils/errors.js';
+import * as MemberModel from '../models/MemberModel.js';
+import { BadRequestError, NotFoundError, ValidationError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 import { generateEventOccurrences, newSeriesId } from '../utils/eventRecurrenceUtils.js';
 
@@ -128,4 +130,31 @@ export const removeSeries = async (tenantId, gymId, seriesId) => {
   await validateGym(tenantId, gymId);
   const result = await EventModel.removeBySeriesId(seriesId, gymId);
   return { message: `Deleted ${result.count} events`, count: result.count };
+};
+
+export const listBookings = async (tenantId, gymId, eventId) => {
+  await getById(tenantId, gymId, eventId);
+  const bookings = await EventBookingModel.findByEvent(eventId);
+  return { bookings };
+};
+
+export const bookEvent = async (tenantId, gymId, eventId, memberId) => {
+  const event = await getById(tenantId, gymId, eventId);
+  if (!event.isActive) throw new BadRequestError('This class is not available');
+  const member = await MemberModel.findById(memberId, gymId);
+  if (!member) throw new NotFoundError('Member not found');
+  const existing = await EventBookingModel.findOne(eventId, memberId);
+  if (existing) throw new BadRequestError('Already booked');
+  if (event.seatLimit && event.participantCount >= event.seatLimit) {
+    throw new BadRequestError('This class is full');
+  }
+  return EventBookingModel.create({ eventId, memberId, status: 'confirmed' });
+};
+
+export const cancelBooking = async (tenantId, gymId, eventId, memberId) => {
+  await getById(tenantId, gymId, eventId);
+  const existing = await EventBookingModel.findOne(eventId, memberId);
+  if (!existing) throw new NotFoundError('Booking not found');
+  await EventBookingModel.remove(existing.id);
+  return { message: 'Booking cancelled' };
 };

@@ -19,6 +19,16 @@ export const list = asyncHandler(async (req, res) => {
   successResponse(res, data);
 });
 
+export const getById = asyncHandler(async (req, res) => {
+  const ticket = await SupportService.getById(req.user, req.params.ticketId);
+  successResponse(res, { ticket });
+});
+
+export const reply = asyncHandler(async (req, res) => {
+  const ticket = await SupportService.reply(req.user, req.params.ticketId, req.body);
+  successResponse(res, { ticket }, 'Reply sent');
+});
+
 export const updateStatus = asyncHandler(async (req, res) => {
   const ticket = await SupportService.updateStatus(req.user, req.params.ticketId, req.body.status);
   successResponse(res, { ticket }, 'Ticket status updated');

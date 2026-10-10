@@ -16,6 +16,7 @@ const memberBodySchema = z.object({
   profileImage: z.string().url().optional().nullable(),
   planId: z.string().uuid().optional().nullable(),
   membershipStartDate: z.string().optional().nullable(),
+  portalPassword: z.string().min(8).max(100).optional(),
 });
 
 export const createMemberSchema = z.object({

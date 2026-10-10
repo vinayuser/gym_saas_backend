@@ -1,3 +1,6 @@
+import { pageParams } from '../helpers/query.js';
+import { paginationMeta } from '../helpers/pagination.js';
+
 export const successResponse = (res, data, message = 'Success', statusCode = 200, meta = null) => {
   const body = { success: true, message, data };
   if (meta) body.meta = meta;
@@ -20,21 +23,10 @@ export const errorResponse = (res, message, statusCode = 500, code = 'INTERNAL_E
 };
 
 export const parsePagination = (query) => {
-  const page = Math.max(1, parseInt(query.page || '1', 10));
-  const limit = Math.min(100, Math.max(1, parseInt(query.limit || '20', 10)));
-  const skip = (page - 1) * limit;
-  const sortBy = query.sortBy || 'createdAt';
-  const sortOrder = query.sortOrder === 'asc' ? 'asc' : 'desc';
-  const search = query.search?.trim() || '';
-
+  const { page, limit, skip, search, sort } = pageParams(query);
+  const sortBy = Object.keys(sort)[0] || 'createdAt';
+  const sortOrder = sort[sortBy] === 1 ? 'asc' : 'desc';
   return { page, limit, skip, sortBy, sortOrder, search };
 };
 
-export const buildPaginationMeta = (total, page, limit) => ({
-  total,
-  page,
-  limit,
-  totalPages: Math.ceil(total / limit) || 1,
-  hasNext: page * limit < total,
-  hasPrev: page > 1,
-});
+export const buildPaginationMeta = paginationMeta;

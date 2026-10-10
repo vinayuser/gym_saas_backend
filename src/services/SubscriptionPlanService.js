@@ -1,5 +1,23 @@
-import prisma from '../config/database.js';
+import { SubscriptionPlan } from '../schemas/index.js';
+import { aggregateOne } from '../helpers/pagination.js';
+import { updateById } from '../helpers/document.js';
+import { lookupMany } from '../helpers/query.js';
+import { COLLECTIONS, SORT } from '../helpers/constants.js';
+import { planPublic } from '../projections/tenant.projection.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
+
+const countLookups = [
+  lookupMany(COLLECTIONS.GYM_INVITES, '_id', 'planId', '_invites', [{ $project: { _id: 1 } }]),
+  lookupMany(COLLECTIONS.SUBSCRIPTIONS, '_id', 'planId', '_subs', [{ $project: { _id: 1 } }]),
+  {
+    $addFields: {
+      _count: {
+        gymInvites: { $size: '$_invites' },
+        subscriptions: { $size: '$_subs' },
+      },
+    },
+  },
+];
 
 const serializePlan = (plan) => ({
   id: plan.id,
@@ -16,41 +34,34 @@ const serializePlan = (plan) => ({
   subscriptionCount: plan._count?.subscriptions ?? 0,
 });
 
-export const listPlans = async ({ activeOnly = false } = {}) => {
-  const plans = await prisma.subscriptionPlan.findMany({
-    where: activeOnly ? { isActive: true } : undefined,
-    orderBy: { priceMonthly: 'asc' },
-    include: {
-      _count: {
-        select: {
-          gymInvites: true,
-          subscriptions: true,
-        },
-      },
-    },
+const planProject = { ...planPublic, _count: 1 };
+
+const loadPlan = (match) =>
+  aggregateOne(SubscriptionPlan, {
+    match,
+    lookups: countLookups,
+    project: planProject,
   });
+
+export const listPlans = async ({ activeOnly = false } = {}) => {
+  const plans = await SubscriptionPlan.aggregate([
+    ...(activeOnly ? [{ $match: { isActive: true } }] : []),
+    { $sort: { priceMonthly: 1 } },
+    ...countLookups,
+    { $project: planProject },
+  ]);
 
   return plans.map(serializePlan);
 };
 
 export const getPlanById = async (id) => {
-  const plan = await prisma.subscriptionPlan.findUnique({
-    where: { id },
-    include: {
-      _count: {
-        select: {
-          gymInvites: true,
-          subscriptions: true,
-        },
-      },
-    },
-  });
+  const plan = await loadPlan({ _id: id });
   if (!plan) throw new NotFoundError('Plan not found');
   return serializePlan(plan);
 };
 
 export const updatePlan = async (id, body) => {
-  const existing = await prisma.subscriptionPlan.findUnique({ where: { id } });
+  const existing = await loadPlan({ _id: id });
   if (!existing) throw new NotFoundError('Plan not found');
 
   const data = {};
@@ -87,18 +98,6 @@ export const updatePlan = async (id, body) => {
     throw new BadRequestError('Nothing to update');
   }
 
-  const updated = await prisma.subscriptionPlan.update({
-    where: { id },
-    data,
-    include: {
-      _count: {
-        select: {
-          gymInvites: true,
-          subscriptions: true,
-        },
-      },
-    },
-  });
-
-  return serializePlan(updated);
+  await updateById(SubscriptionPlan, id, data);
+  return getPlanById(id);
 };

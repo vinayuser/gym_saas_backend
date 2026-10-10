@@ -1,19 +1,69 @@
 import { z } from 'zod';
 
 export const createInviteSchema = z.object({
-  body: z.object({
-    email: z.string().email(),
-    planId: z.string().uuid().optional(),
-    inviteeName: z.string().max(120).optional(),
-    businessName: z.string().min(2).max(200),
-    note: z.string().max(500).optional(),
-    expiryDays: z.coerce.number().int().min(1).max(90).optional(),
-  }),
+  body: z
+    .object({
+      email: z.string().email().optional(),
+      planId: z.string().uuid().optional(),
+      inviteeName: z.string().max(120).optional(),
+      businessName: z.string().min(2).max(200),
+      note: z.string().max(500).optional(),
+      expiryDays: z.coerce.number().int().min(1).max(90).optional(),
+      purpose: z.enum(['ONBOARD', 'EXTRA_BRANCH']).optional(),
+      existingTenantId: z.string().uuid().optional(),
+      parentInviteId: z.string().uuid().optional(),
+    })
+    .superRefine((body, ctx) => {
+      const purpose = body.purpose || 'ONBOARD';
+      if (purpose === 'EXTRA_BRANCH') {
+        if (!body.existingTenantId && !body.parentInviteId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'existingTenantId or parentInviteId is required for an extra branch invite',
+            path: ['existingTenantId'],
+          });
+        }
+        return;
+      }
+      if (!body.email) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'email is required',
+          path: ['email'],
+        });
+      }
+    }),
 });
 
 export const inviteIdParamSchema = z.object({
   params: z.object({
     id: z.string().uuid(),
+  }),
+});
+
+export const inviteRecordsQuerySchema = z.object({
+  params: z.object({
+    id: z.string().uuid(),
+  }),
+  query: z.object({
+    gymId: z.string().uuid().optional(),
+    resource: z.enum([
+      'members',
+      'staff',
+      'trainers',
+      'plans',
+      'payments',
+      'invoices',
+      'attendance',
+      'orders',
+      'products',
+      'events',
+      'leads',
+      'banners',
+    ]),
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    search: z.string().max(120).optional(),
   }),
 });
 
@@ -64,8 +114,8 @@ export const listInvitesQuerySchema = z.object({
   query: z.object({
     page: z.coerce.number().optional(),
     limit: z.coerce.number().optional(),
-    status: z.string().optional(),
-    search: z.string().optional(),
+    status: z.enum(['ALL', 'PENDING', 'SENT', 'PAYMENT_PENDING', 'ACCEPTED', 'REVOKED', 'EXPIRED']).optional(),
+    search: z.string().max(120).optional(),
   }),
 });
 
@@ -78,6 +128,22 @@ export const publishAppSchema = z.object({
     appPublished: z.boolean().optional(),
     adsEnabled: z.boolean().optional(),
   }),
+});
+
+export const appAdsSchema = z.object({
+  params: z.object({
+    id: z.string().uuid(),
+  }),
+  body: z
+    .object({
+      gymId: z.string().uuid().optional(),
+      banners: z.boolean().optional(),
+      video: z.boolean().optional(),
+      audio: z.boolean().optional(),
+    })
+    .refine((body) => ['banners', 'video', 'audio'].some((key) => typeof body[key] === 'boolean'), {
+      message: 'Provide at least one app ad flag',
+    }),
 });
 
 export const listGymOwnersQuerySchema = z.object({

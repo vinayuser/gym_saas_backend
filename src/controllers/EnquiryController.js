@@ -26,3 +26,13 @@ export const remove = asyncHandler(async (req, res) => {
   const result = await EnquiryService.remove(req.tenantId, req.params.enquiryId);
   successResponse(res, result);
 });
+
+export const convert = asyncHandler(async (req, res) => {
+  const data = await EnquiryService.convert(
+    req.tenantId,
+    req.params.gymId,
+    req.params.enquiryId,
+    req.body
+  );
+  successResponse(res, data, 'Lead converted to member', 201);
+});

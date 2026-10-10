@@ -20,5 +20,11 @@ router.post('/:gymId/enquiries', requireRoles(...roles), validate(createEnquiryS
 router.get('/:gymId/enquiries/:enquiryId', requireRoles(...roles), validate(enquiryParamsSchema), EnquiryController.getById);
 router.put('/:gymId/enquiries/:enquiryId', requireRoles(...roles), validate(updateEnquirySchema), EnquiryController.update);
 router.delete('/:gymId/enquiries/:enquiryId', requireRoles(...roles), validate(enquiryParamsSchema), EnquiryController.remove);
+router.post(
+  '/:gymId/enquiries/:enquiryId/convert',
+  requireRoles(...roles),
+  validate(enquiryParamsSchema),
+  EnquiryController.convert
+);
 
 export default router;

@@ -3,7 +3,7 @@ import * as InviteModel from '../models/InviteModel.js';
 import { successResponse } from '../utils/response.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { BadRequestError, UnauthorizedError } from '../utils/errors.js';
-import { assertFileSize, IMAGE_MAX_BYTES, VIDEO_MAX_BYTES } from '../middlewares/upload.middleware.js';
+import { assertFileSize, IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, AUDIO_MAX_BYTES } from '../middlewares/upload.middleware.js';
 
 const assertUploadAccess = async (req) => {
   const inviteToken = req.query.inviteToken || req.body?.inviteToken;
@@ -36,17 +36,18 @@ export const uploadSingle = asyncHandler(async (req, res) => {
 
   const folder = req.body.folder || req.query.folder;
   if (!folder) {
-    throw new BadRequestError('folder is required (e.g. banners, gyms/logos, gyms/gallery, gyms/videos)');
+    throw new BadRequestError('folder is required (e.g. banners, gyms/logos, gyms/gallery, gyms/videos, gyms/ads/video, gyms/ads/audio)');
   }
 
   const isVideo = req.file.mimetype.startsWith('video/');
+  const isAudio = req.file.mimetype.startsWith('audio/');
   const isPdf = req.file.mimetype === 'application/pdf';
-  assertFileSize(req.file, isVideo ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES);
+  assertFileSize(req.file, isVideo ? VIDEO_MAX_BYTES : isAudio ? AUDIO_MAX_BYTES : IMAGE_MAX_BYTES);
 
   const resourceType =
     req.body.resourceType ||
     req.query.resourceType ||
-    (isVideo ? 'video' : isPdf ? 'raw' : 'image');
+    (isVideo || isAudio ? 'video' : isPdf ? 'raw' : 'image');
 
   const asset = await CloudinaryService.uploadFromFile(req.file, {
     folder,

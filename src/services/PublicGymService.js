@@ -1,5 +1,17 @@
-import prisma from '../config/database.js';
-import { NotFoundError } from '../utils/errors.js';
+import {
+  Gym,
+  Tenant,
+  GymMembershipPlan,
+  Member,
+  ContactMessage,
+} from '../schemas/index.js';
+import { aggregateOne, countDocuments } from '../helpers/pagination.js';
+import { createDoc, asDoc } from '../helpers/document.js';
+import { lookupOne, notDeleted } from '../helpers/query.js';
+import { COLLECTIONS } from '../helpers/constants.js';
+import { gymPublic } from '../projections/gym.projection.js';
+import { normalizeAppAds } from '../helpers/appAds.js';
+import { NotFoundError, BadRequestError } from '../utils/errors.js';
 
 const DEFAULT_BRANDING = {
   primaryColor: '#C3F400',
@@ -20,45 +32,131 @@ const mapActiveBanner = (b) => ({
   endDate: b.endDate,
 });
 
-const mapBranding = (gym, tenant, { banners = [] } = {}) => ({
-  gymId: gym.id,
-  slug: gym.slug,
-  appAlias: gym.appAlias || null,
-  appPublished: Boolean(gym.appPublished),
-  adsEnabled: gym.adsEnabled !== false,
-  name: gym.name,
-  tagline: gym.appTagline || tenant?.name || 'FitSphere Pro',
-  logo: gym.logo || tenant?.logo || null,
-  coverImage: gym.coverImage || gym.images?.[0] || null,
-  primaryColor: gym.primaryColor || DEFAULT_BRANDING.primaryColor,
-  secondaryColor: gym.secondaryColor || DEFAULT_BRANDING.secondaryColor,
-  accentColor: gym.accentColor || DEFAULT_BRANDING.accentColor,
-  themeMode: gym.themeMode || DEFAULT_BRANDING.themeMode,
-  banners: gym.adsEnabled === false ? [] : banners.map(mapActiveBanner),
-  tenant: tenant
-    ? {
-        id: tenant.id,
-        name: tenant.name,
-        slug: tenant.slug,
-        logo: tenant.logo,
-      }
-    : null,
+const mapMediaAd = (ad) => ({
+  id: ad.id,
+  type: ad.type,
+  title: ad.title,
+  mediaUrl: ad.mediaUrl,
+  thumbnailUrl: ad.thumbnailUrl || null,
+  clickUrl: ad.clickUrl || null,
+  durationSec: ad.durationSec ?? null,
 });
 
-const gymPublicInclude = {
-  tenant: {
-    select: { id: true, name: true, slug: true, logo: true, isActive: true },
-  },
-  banners: {
-    where: {
-      deletedAt: null,
-      isActive: true,
-      status: 'ACTIVE',
-    },
-    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
-    take: 20,
+const mapBranding = (gym, tenant, { banners = [], mediaAds = [] } = {}) => {
+  const appAds = normalizeAppAds(gym.appAds, gym.adsEnabled);
+  return {
+    gymId: gym.id,
+    slug: gym.slug,
+    appAlias: gym.appAlias || null,
+    appPublished: Boolean(gym.appPublished),
+    adsEnabled: appAds.banners,
+    appAds,
+    name: gym.name,
+    tagline: gym.appTagline || tenant?.name || 'FitSphere Pro',
+    logo: gym.logo || tenant?.logo || null,
+    coverImage: gym.coverImage || gym.images?.[0] || null,
+    primaryColor: gym.primaryColor || DEFAULT_BRANDING.primaryColor,
+    secondaryColor: gym.secondaryColor || DEFAULT_BRANDING.secondaryColor,
+    accentColor: gym.accentColor || DEFAULT_BRANDING.accentColor,
+    themeMode: gym.themeMode || DEFAULT_BRANDING.themeMode,
+    banners: appAds.banners ? banners.map(mapActiveBanner) : [],
+    videoAds: appAds.video ? mediaAds.filter((ad) => ad.type === 'VIDEO').map(mapMediaAd) : [],
+    audioAds: appAds.audio ? mediaAds.filter((ad) => ad.type === 'AUDIO').map(mapMediaAd) : [],
+    tenant: tenant
+      ? {
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          logo: tenant.logo,
+        }
+      : null,
+  };
+};
+
+const bannerLookup = {
+  $lookup: {
+    from: COLLECTIONS.BANNERS,
+    let: { gid: '$_id' },
+    pipeline: [
+      {
+        $match: {
+          $expr: { $eq: ['$gymId', '$$gid'] },
+          deletedAt: null,
+          isActive: true,
+          status: 'ACTIVE',
+        },
+      },
+      { $sort: { sortOrder: 1, createdAt: -1 } },
+      { $limit: 20 },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          name: 1,
+          category: 1,
+          placement: 1,
+          imageUrl: 1,
+          ctaType: 1,
+          ctaDestination: 1,
+          startDate: 1,
+          endDate: 1,
+        },
+      },
+    ],
+    as: 'banners',
   },
 };
+
+const mediaAdLookup = {
+  $lookup: {
+    from: COLLECTIONS.GYM_MEDIA_ADS,
+    let: { gid: '$_id' },
+    pipeline: [
+      {
+        $match: {
+          $expr: { $eq: ['$gymId', '$$gid'] },
+          deletedAt: null,
+          isActive: true,
+        },
+      },
+      { $sort: { sortOrder: 1, createdAt: -1 } },
+      { $limit: 20 },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          type: 1,
+          title: 1,
+          mediaUrl: 1,
+          thumbnailUrl: 1,
+          clickUrl: 1,
+          durationSec: 1,
+        },
+      },
+    ],
+    as: 'mediaAds',
+  },
+};
+
+const brandingLookups = [
+  ...lookupOne(COLLECTIONS.TENANTS, 'tenantId', 'tenant', {
+    _id: 0,
+    id: '$_id',
+    name: 1,
+    slug: 1,
+    logo: 1,
+    isActive: 1,
+  }),
+  bannerLookup,
+  mediaAdLookup,
+];
+
+const findPublicGym = (match) =>
+  aggregateOne(Gym, {
+    match: { ...match, ...notDeleted, isActive: true },
+    lookups: brandingLookups,
+    project: { ...gymPublic, tenant: 1, banners: 1, mediaAds: 1 },
+  });
 
 const assertPublishedIfAlias = (gym, lookupWasAlias) => {
   if (lookupWasAlias && !gym.appPublished) {
@@ -67,16 +165,13 @@ const assertPublishedIfAlias = (gym, lookupWasAlias) => {
 };
 
 export const getBrandingBySlug = async (slug) => {
-  const gym = await prisma.gym.findFirst({
-    where: { slug, deletedAt: null, isActive: true },
-    include: gymPublicInclude,
-  });
+  const gym = await findPublicGym({ slug });
 
   if (!gym || !gym.tenant?.isActive) {
     throw new NotFoundError('Gym not found');
   }
 
-  return mapBranding(gym, gym.tenant, { banners: gym.banners });
+  return mapBranding(gym, gym.tenant, { banners: gym.banners, mediaAds: gym.mediaAds });
 };
 
 export const getBrandingByAlias = async (alias) => {
@@ -85,41 +180,27 @@ export const getBrandingByAlias = async (alias) => {
     .toLowerCase();
   if (!value) throw new NotFoundError('Gym not found');
 
-  const gym = await prisma.gym.findFirst({
-    where: { appAlias: value, deletedAt: null, isActive: true },
-    include: gymPublicInclude,
-  });
+  const gym = await findPublicGym({ appAlias: value });
 
   if (!gym || !gym.tenant?.isActive) {
     throw new NotFoundError('Gym not found');
   }
   assertPublishedIfAlias(gym, true);
 
-  return mapBranding(gym, gym.tenant, { banners: gym.banners });
+  return mapBranding(gym, gym.tenant, { banners: gym.banners, mediaAds: gym.mediaAds });
 };
 
 export const getPublicGymInfo = async (slug) => {
   const branding = await getBrandingBySlug(slug);
 
-  const gym = await prisma.gym.findFirst({
-    where: { id: branding.gymId, deletedAt: null },
-    include: {
-      membershipPlans: {
-        where: { isActive: true },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          durationDays: true,
-          price: true,
-          billingCycle: true,
-        },
-        orderBy: { price: 'asc' },
-        take: 10,
-      },
-      _count: { select: { members: true } },
-    },
-  });
+  const [gym, plans, memberCount] = await Promise.all([
+    asDoc(await Gym.findOne({ _id: branding.gymId, ...notDeleted })),
+    GymMembershipPlan.find({ gymId: branding.gymId, isActive: true, ...notDeleted })
+      .sort({ price: 1 })
+      .limit(10)
+      .select('name description durationDays price billingCycle'),
+    countDocuments(Member, { gymId: branding.gymId, ...notDeleted }),
+  ]);
 
   if (!gym) throw new NotFoundError('Gym not found');
 
@@ -134,11 +215,11 @@ export const getPublicGymInfo = async (slug) => {
     pincode: gym.pincode,
     operatingHours: gym.operatingHours,
     images: gym.images || [],
-    memberCount: gym._count.members,
-    plans: gym.membershipPlans.map((p) => ({
-      ...p,
-      price: Number(p.price),
-    })),
+    memberCount,
+    plans: plans.map((p) => {
+      const row = asDoc(p);
+      return { ...row, price: Number(row.price) };
+    }),
   };
 };
 
@@ -146,67 +227,47 @@ export const resolveGym = async ({ slug, code, alias }) => {
   const value = (alias || slug || code || '').trim().toLowerCase();
   if (!value) throw new NotFoundError('Gym not found');
 
-  // Prefer explicit alias query param, then try appAlias match
   if (alias) {
     return getBrandingByAlias(value);
   }
 
-  const byAlias = await prisma.gym.findFirst({
-    where: { appAlias: value, deletedAt: null, isActive: true },
-    select: { id: true, appPublished: true },
-  });
+  const byAlias = asDoc(
+    await Gym.findOne({ appAlias: value, ...notDeleted, isActive: true }).select('appPublished')
+  );
   if (byAlias) {
     return getBrandingByAlias(value);
   }
 
-  // Try gym slug first, then tenant slug → first active gym
   try {
     return await getBrandingBySlug(value);
   } catch {
     // fall through
   }
 
-  const tenant = await prisma.tenant.findFirst({
-    where: { slug: value, deletedAt: null, isActive: true },
-    include: {
-      gyms: {
-        where: { deletedAt: null, isActive: true },
-        orderBy: { createdAt: 'asc' },
-        take: 1,
-        include: gymPublicInclude,
-      },
-    },
-  });
+  const tenant = asDoc(await Tenant.findOne({ slug: value, ...notDeleted, isActive: true }));
+  if (!tenant) throw new NotFoundError('Gym not found');
 
-  const gym = tenant?.gyms?.[0];
+  const gym = await aggregateOne(Gym, {
+    match: { tenantId: tenant.id, ...notDeleted, isActive: true },
+    lookups: [bannerLookup, mediaAdLookup],
+    project: { ...gymPublic, banners: 1, mediaAds: 1 },
+  });
   if (!gym) throw new NotFoundError('Gym not found');
 
-  return mapBranding(gym, tenant, { banners: gym.banners });
+  return mapBranding(gym, tenant, { banners: gym.banners, mediaAds: gym.mediaAds });
 };
 
 export const listPublicGymsByTenant = async (tenantSlug) => {
-  const tenant = await prisma.tenant.findFirst({
-    where: { slug: tenantSlug, deletedAt: null, isActive: true },
-    include: {
-      gyms: {
-        where: { deletedAt: null, isActive: true },
-        orderBy: { name: 'asc' },
-        include: {
-          banners: {
-            where: {
-              deletedAt: null,
-              isActive: true,
-              status: 'ACTIVE',
-            },
-            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
-            take: 20,
-          },
-        },
-      },
-    },
-  });
-
+  const tenant = asDoc(await Tenant.findOne({ slug: tenantSlug, ...notDeleted, isActive: true }));
   if (!tenant) throw new NotFoundError('Business not found');
+
+  const gyms = await Gym.aggregate([
+    { $match: { tenantId: tenant.id, ...notDeleted, isActive: true } },
+    { $sort: { name: 1 } },
+    bannerLookup,
+    mediaAdLookup,
+    { $project: { ...gymPublic, banners: 1, mediaAds: 1 } },
+  ]);
 
   return {
     tenant: {
@@ -215,6 +276,20 @@ export const listPublicGymsByTenant = async (tenantSlug) => {
       slug: tenant.slug,
       logo: tenant.logo,
     },
-    gyms: tenant.gyms.map((g) => mapBranding(g, tenant, { banners: g.banners })),
+    gyms: gyms.map((g) => mapBranding(g, tenant, { banners: g.banners, mediaAds: g.mediaAds })),
   };
+};
+
+export const submitContact = async (body) => {
+  const name = String(body.name || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const message = String(body.message || '').trim();
+  if (!name || !email || !message) throw new BadRequestError('Name, email, and message are required');
+  const row = await createDoc(ContactMessage, {
+    name,
+    email,
+    company: body.company ? String(body.company).trim() : null,
+    message,
+  });
+  return { id: row.id };
 };

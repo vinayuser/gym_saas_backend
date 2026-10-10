@@ -58,6 +58,7 @@ model Gym {
   banners           Banner[]
   sales             Sale[]
   chatMessages      GymChatMessage[]
+  dayPasses         DayPass[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])

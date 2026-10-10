@@ -1,6 +1,7 @@
 import * as EnquiryModel from '../models/EnquiryModel.js';
 import * as GymModel from '../models/GymModel.js';
-import { NotFoundError } from '../utils/errors.js';
+import * as MemberService from './MemberService.js';
+import { BadRequestError, NotFoundError } from '../utils/errors.js';
 
 const validateGym = async (tenantId, gymId) => {
   if (!gymId) return null;
@@ -99,4 +100,27 @@ export const remove = async (tenantId, enquiryId) => {
   if (!existing) throw new NotFoundError('Lead not found');
   await EnquiryModel.remove(enquiryId);
   return { message: 'Lead deleted successfully' };
+};
+
+export const convert = async (tenantId, gymId, enquiryId, body = {}) => {
+  const enquiry = await EnquiryModel.findById(enquiryId, tenantId);
+  if (!enquiry) throw new NotFoundError('Lead not found');
+  if (enquiry.status === 'CONVERTED' && enquiry.convertedAt) {
+    throw new BadRequestError('This lead is already converted');
+  }
+  const gender = enquiry.gender ? String(enquiry.gender).toLowerCase() : undefined;
+  const member = await MemberService.create(tenantId, gymId, {
+    firstName: enquiry.name,
+    lastName: enquiry.lastName || '',
+    email: enquiry.email,
+    phone: enquiry.phone,
+    dateOfBirth: enquiry.dateOfBirth ? enquiry.dateOfBirth.toISOString() : undefined,
+    gender: ['male', 'female', 'other'].includes(gender) ? gender : undefined,
+    address: enquiry.address || undefined,
+    fitnessGoals: enquiry.fitnessGoal || undefined,
+    planId: body.planId || undefined,
+    portalPassword: body.portalPassword,
+  });
+  await EnquiryModel.update(enquiryId, { status: 'CONVERTED', convertedAt: new Date() });
+  return { member, enquiryId };
 };

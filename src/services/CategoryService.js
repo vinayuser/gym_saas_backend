@@ -14,7 +14,8 @@ export const list = async (tenantId, gymId, query = {}) => {
   const pagination = parsePagination(query);
   const [categories, total] = await CategoryModel.findMany(gymId, {
     skip: pagination.skip,
-    take: pagination.limit,
+    limit: pagination.limit,
+    search: pagination.search,
   });
   return { categories, pagination: buildPaginationMeta(total, pagination.page, pagination.limit) };
 };

@@ -8,9 +8,9 @@ export const list = asyncHandler(async (_req, res) => {
   successResponse(res, data);
 });
 
-export const listTeam = asyncHandler(async (_req, res) => {
-  const data = await PlatformAdminService.listTeam();
-  successResponse(res, data);
+export const listTeam = asyncHandler(async (req, res) => {
+  const data = await PlatformAdminService.listTeam(req.query);
+  successResponse(res, data, 'Success', 200, data.pagination ? { pagination: data.pagination } : null);
 });
 
 export const createRole = asyncHandler(async (req, res) => {

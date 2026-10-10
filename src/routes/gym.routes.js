@@ -16,7 +16,7 @@ const router = Router();
 router.use(authenticate, resolveTenant);
 
 router.get('/', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'), GymController.list);
-router.post('/', requireRoles('SUPER_ADMIN', 'GYM_OWNER'), validate(createGymSchema), GymController.create);
+router.post('/', requireRoles('SUPER_ADMIN'), validate(createGymSchema), GymController.create);
 router.get(
   '/:gymId/dashboard/analytics',
   requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'),

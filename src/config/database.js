@@ -1,26 +1,19 @@
-import { PrismaClient } from '@prisma/client';
+import mongoose from 'mongoose';
 import env from './env.js';
+import logger from '../utils/logger.js';
 
-const globalForPrisma = globalThis;
+let connecting;
 
-const createPrismaClient = () =>
-  new PrismaClient({
-    log: env.nodeEnv === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
+export const connectDb = async () => {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+  if (!connecting) {
+    connecting = mongoose.connect(env.mongoUri);
+  }
+  await connecting;
+  logger.info('MongoDB connected');
+  return mongoose.connection;
+};
 
-let prisma = globalForPrisma.prisma ?? createPrismaClient();
+export const disconnectDb = () => mongoose.disconnect();
 
-// After `prisma generate`, nodemon may reload routes while globalThis still holds an old client.
-const isStaleClient =
-  typeof prisma.gymChatMessage?.findMany !== 'function' ||
-  typeof prisma.supportTicket?.create !== 'function';
-
-if (env.nodeEnv !== 'production' && isStaleClient) {
-  prisma.$disconnect().catch(() => {});
-  prisma = createPrismaClient();
-  globalForPrisma.prisma = prisma;
-} else if (env.nodeEnv !== 'production') {
-  globalForPrisma.prisma = prisma;
-}
-
-export default prisma;
+export default mongoose;

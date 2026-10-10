@@ -1,4 +1,8 @@
-import prisma from '../config/database.js';
+import { User, Role, Permission, RolePermission, UserRoleAssignment } from '../schemas/index.js';
+import { createDoc, updateById, asDoc } from '../helpers/document.js';
+import { lookupOne, notDeleted, pageParams, textSearch } from '../helpers/query.js';
+import { paginate } from '../helpers/pagination.js';
+import { COLLECTIONS, ROLES, USER_STATUS, SORT } from '../helpers/constants.js';
 import { hashPassword } from '../utils/password.js';
 import { BadRequestError, ConflictError, NotFoundError } from '../utils/errors.js';
 import {
@@ -15,30 +19,50 @@ const slugify = (value) =>
     .replace(/(^-|-$)/g, '')
     .slice(0, 48);
 
+const isDup = (err) => err?.code === 11000;
+
 export const ensurePlatformPermissions = async () => {
   for (const item of PLATFORM_PERMISSIONS) {
-    await prisma.permission.upsert({
-      where: { slug: item.slug },
-      update: { name: item.name, module: item.module, description: item.description, scope: 'platform' },
-      create: { ...item, scope: 'platform' },
-    });
+    await Permission.findOneAndUpdate(
+      { slug: item.slug },
+      { $set: { name: item.name, module: item.module, description: item.description, scope: 'platform' } },
+      { upsert: true }
+    );
   }
 };
 
 export const permissionSlugsForUser = async (user) => {
   if (!user) return [];
-  if (user.role === 'SUPER_ADMIN') return [...PLATFORM_PERMISSION_SLUGS];
-  if (user.role !== 'PLATFORM_ADMIN') return [];
+  if (user.role === ROLES.SUPER_ADMIN) return [...PLATFORM_PERMISSION_SLUGS];
+  if (user.role !== ROLES.PLATFORM_ADMIN) return [];
 
-  const assignments = await prisma.userRoleAssignment.findMany({
-    where: { userId: user.id, role: { scope: 'platform' } },
-    include: { role: { include: { permissions: { include: { permission: true } } } } },
-  });
+  const assignments = await UserRoleAssignment.aggregate([
+    { $match: { userId: user.id } },
+    ...lookupOne(COLLECTIONS.ROLES, 'roleId', 'role', { _id: 0, id: '$_id', scope: 1 }),
+    { $match: { 'role.scope': 'platform' } },
+    {
+      $lookup: {
+        from: COLLECTIONS.ROLE_PERMISSIONS,
+        let: { rid: '$roleId' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$roleId', '$$rid'] } } },
+          ...lookupOne(COLLECTIONS.PERMISSIONS, 'permissionId', 'permission', {
+            _id: 0,
+            id: '$_id',
+            slug: 1,
+            scope: 1,
+          }),
+          { $match: { 'permission.scope': 'platform' } },
+        ],
+        as: 'permissions',
+      },
+    },
+  ]);
 
   const slugs = [];
   for (const assignment of assignments) {
-    for (const link of assignment.role.permissions) {
-      if (link.permission.scope === 'platform') slugs.push(link.permission.slug);
+    for (const link of assignment.permissions || []) {
+      if (link.permission?.slug) slugs.push(link.permission.slug);
     }
   }
   return [...expandPlatformPermissions(slugs)];
@@ -50,59 +74,143 @@ const mapRole = (role) => ({
   slug: role.slug,
   description: role.description || '',
   userCount: role._count?.users || 0,
-  permissionIds: role.permissions.map((link) => link.permissionId),
+  permissionIds: (role.permissions || []).map((link) => link.permissionId),
 });
+
+const roleLookups = [
+  {
+    $lookup: {
+      from: COLLECTIONS.ROLE_PERMISSIONS,
+      let: { rid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$roleId', '$$rid'] } } },
+        { $project: { _id: 0, id: '$_id', permissionId: 1 } },
+      ],
+      as: 'permissions',
+    },
+  },
+  {
+    $lookup: {
+      from: COLLECTIONS.USER_ROLE_ASSIGNMENTS,
+      let: { rid: '$_id' },
+      pipeline: [{ $match: { $expr: { $eq: ['$roleId', '$$rid'] } } }, { $project: { _id: 1 } }],
+      as: '_users',
+    },
+  },
+  { $addFields: { _count: { users: { $size: '$_users' } } } },
+];
+
+const loadRole = async (roleId) => {
+  const [row] = await Role.aggregate([
+    { $match: { _id: roleId, scope: 'platform' } },
+    ...roleLookups,
+    {
+      $project: {
+        _id: 0,
+        id: '$_id',
+        name: 1,
+        slug: 1,
+        description: 1,
+        permissions: 1,
+        _count: 1,
+      },
+    },
+  ]);
+  return row || null;
+};
 
 const platformPermissions = async () => {
   await ensurePlatformPermissions();
-  return prisma.permission.findMany({
-    where: { scope: 'platform' },
-    orderBy: [{ module: 'asc' }, { name: 'asc' }],
-  });
+  return Permission.aggregate([
+    { $match: { scope: 'platform' } },
+    { $sort: { module: 1, name: 1 } },
+    {
+      $project: {
+        _id: 0,
+        id: '$_id',
+        name: 1,
+        slug: 1,
+        module: 1,
+        description: 1,
+        scope: 1,
+        createdAt: 1,
+      },
+    },
+  ]);
 };
 
 const assertPlatformPermissionIds = async (permissionIds) => {
-  const rows = await prisma.permission.findMany({
-    where: { id: { in: permissionIds }, scope: 'platform' },
-    select: { id: true },
-  });
+  const rows = await Permission.find({ _id: { $in: permissionIds }, scope: 'platform' }).select('_id');
   if (rows.length !== permissionIds.length) {
     throw new BadRequestError('Choose platform permissions only');
   }
-  return rows.map((row) => row.id);
+  return rows.map((row) => row._id);
 };
 
-export const listTeam = async () => {
-  const [roles, permissions, admins] = await Promise.all([
-    prisma.role.findMany({
-      where: { scope: 'platform' },
-      include: { permissions: true, _count: { select: { users: true } } },
-      orderBy: { name: 'asc' },
-    }),
-    platformPermissions(),
-    prisma.user.findMany({
-      where: { role: 'PLATFORM_ADMIN', deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        phone: true,
-        status: true,
-        createdAt: true,
-        roleAssignments: {
-          where: { role: { scope: 'platform' } },
-          select: { roleId: true, role: { select: { id: true, name: true } } },
+export const listTeam = async (query = {}) => {
+  const { page, limit, search } = pageParams(query);
+  const adminMatch = {
+    role: ROLES.PLATFORM_ADMIN,
+    ...notDeleted,
+    ...textSearch(search, ['email', 'firstName', 'lastName', 'phone']),
+  };
+
+  const [roles, permissions, adminPage] = await Promise.all([
+    Role.aggregate([
+      { $match: { scope: 'platform' } },
+      { $sort: { name: 1 } },
+      ...roleLookups,
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          name: 1,
+          slug: 1,
+          description: 1,
+          permissions: 1,
+          _count: 1,
         },
       },
+    ]),
+    platformPermissions(),
+    paginate(User, {
+      match: adminMatch,
+      lookups: [
+        {
+          $lookup: {
+            from: COLLECTIONS.USER_ROLE_ASSIGNMENTS,
+            let: { uid: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$userId', '$$uid'] } } },
+              ...lookupOne(COLLECTIONS.ROLES, 'roleId', 'role', { _id: 0, id: '$_id', name: 1, scope: 1 }),
+              { $match: { 'role.scope': 'platform' } },
+              { $project: { _id: 0, roleId: 1, role: { id: '$role.id', name: '$role.name' } } },
+            ],
+            as: 'roleAssignments',
+          },
+        },
+      ],
+      project: {
+        _id: 0,
+        id: '$_id',
+        email: 1,
+        firstName: 1,
+        lastName: 1,
+        phone: 1,
+        status: 1,
+        createdAt: 1,
+        roleAssignments: 1,
+      },
+      sort: SORT.CREATED_DESC,
+      page,
+      limit,
     }),
   ]);
 
   return {
     roles: roles.map(mapRole),
     permissions,
-    admins: admins.map((admin) => ({
+    admins: adminPage.data.map((admin) => ({
       id: admin.id,
       email: admin.email,
       firstName: admin.firstName,
@@ -113,6 +221,7 @@ export const listTeam = async () => {
       roleId: admin.roleAssignments[0]?.roleId || null,
       roleName: admin.roleAssignments[0]?.role?.name || 'No role',
     })),
+    pagination: adminPage.pagination,
   };
 };
 
@@ -120,7 +229,7 @@ const uniqueSlug = async (name) => {
   const base = `platform-${slugify(name) || 'role'}`;
   let slug = base;
   let n = 2;
-  while (await prisma.role.findUnique({ where: { slug } })) {
+  while (asDoc(await Role.findOne({ slug }))) {
     slug = `${base}-${n}`;
     n += 1;
   }
@@ -131,65 +240,70 @@ export const createRole = async ({ name, description, permissionIds }) => {
   const cleanName = name.trim();
   const ids = await assertPlatformPermissionIds(permissionIds || []);
   try {
-    const role = await prisma.role.create({
-      data: {
-        name: cleanName,
-        slug: await uniqueSlug(cleanName),
-        description: description?.trim() || null,
-        scope: 'platform',
-        isSystem: false,
-        permissions: { create: ids.map((permissionId) => ({ permissionId })) },
-      },
-      include: { permissions: true, _count: { select: { users: true } } },
+    const role = await createDoc(Role, {
+      name: cleanName,
+      slug: await uniqueSlug(cleanName),
+      description: description?.trim() || null,
+      scope: 'platform',
+      isSystem: false,
     });
-    return mapRole(role);
+    if (ids.length) {
+      await RolePermission.bulkWrite(
+        ids.map((permissionId) => ({
+          updateOne: {
+            filter: { roleId: role.id, permissionId },
+            update: { $setOnInsert: { roleId: role.id, permissionId } },
+            upsert: true,
+          },
+        })),
+        { ordered: false }
+      );
+    }
+    return mapRole(await loadRole(role.id));
   } catch (err) {
-    if (err.code === 'P2002') throw new ConflictError('A role with this name already exists');
+    if (isDup(err)) throw new ConflictError('A role with this name already exists');
     throw err;
   }
 };
 
 export const updateRole = async (roleId, { name, description, permissionIds }) => {
-  const role = await prisma.role.findFirst({ where: { id: roleId, scope: 'platform' } });
+  const role = asDoc(await Role.findOne({ _id: roleId, scope: 'platform' }));
   if (!role) throw new NotFoundError('Role not found');
   const ids = await assertPlatformPermissionIds(permissionIds || []);
 
-  await prisma.$transaction([
-    prisma.role.update({
-      where: { id: roleId },
-      data: {
-        name: name.trim(),
-        description: description?.trim() || null,
-      },
-    }),
-    prisma.rolePermission.deleteMany({ where: { roleId } }),
-    prisma.rolePermission.createMany({
-      data: ids.map((permissionId) => ({ roleId, permissionId })),
-      skipDuplicates: true,
-    }),
-  ]);
-
-  const updated = await prisma.role.findUnique({
-    where: { id: roleId },
-    include: { permissions: true, _count: { select: { users: true } } },
+  await updateById(Role, roleId, {
+    name: name.trim(),
+    description: description?.trim() || null,
   });
-  return mapRole(updated);
+  await RolePermission.deleteMany({ roleId });
+  if (ids.length) {
+    await RolePermission.bulkWrite(
+      ids.map((permissionId) => ({
+        updateOne: {
+          filter: { roleId, permissionId },
+          update: { $setOnInsert: { roleId, permissionId } },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
+  }
+
+  return mapRole(await loadRole(roleId));
 };
 
 export const deleteRole = async (roleId) => {
-  const role = await prisma.role.findFirst({
-    where: { id: roleId, scope: 'platform' },
-    include: { _count: { select: { users: true } } },
-  });
+  const role = await loadRole(roleId);
   if (!role) throw new NotFoundError('Role not found');
-  if (role._count.users > 0) {
+  if (role._count?.users > 0) {
     throw new BadRequestError('Move sub-admins off this role before deleting it');
   }
-  await prisma.role.delete({ where: { id: roleId } });
+  await RolePermission.deleteMany({ roleId });
+  await Role.findByIdAndDelete(roleId);
 };
 
 const assertPlatformRole = async (roleId) => {
-  const role = await prisma.role.findFirst({ where: { id: roleId, scope: 'platform' } });
+  const role = asDoc(await Role.findOne({ _id: roleId, scope: 'platform' }));
   if (!role) throw new NotFoundError('Role not found');
   return role;
 };
@@ -197,33 +311,32 @@ const assertPlatformRole = async (roleId) => {
 export const createAdmin = async ({ firstName, lastName, email, password, phone, roleId }) => {
   await assertPlatformRole(roleId);
   const normalized = email.trim().toLowerCase();
-  const existing = await prisma.user.findFirst({
-    where: { email: normalized, tenantId: null, deletedAt: null },
-  });
+  const existing = asDoc(await User.findOne({ email: normalized, tenantId: null, ...notDeleted }));
   if (existing) throw new ConflictError('An account with this email already exists');
 
   const hashed = await hashPassword(password);
-  const admin = await prisma.user.create({
-    data: {
-      email: normalized,
-      password: hashed,
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      phone: phone?.trim() || null,
-      role: 'PLATFORM_ADMIN',
-      status: 'ACTIVE',
-      emailVerified: true,
-      roleAssignments: { create: { roleId } },
-    },
-    select: { id: true, email: true, firstName: true, lastName: true, status: true },
+  const admin = await createDoc(User, {
+    email: normalized,
+    password: hashed,
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    phone: phone?.trim() || null,
+    role: ROLES.PLATFORM_ADMIN,
+    status: USER_STATUS.ACTIVE,
+    emailVerified: true,
   });
-  return admin;
+  await createDoc(UserRoleAssignment, { userId: admin.id, roleId });
+  return {
+    id: admin.id,
+    email: admin.email,
+    firstName: admin.firstName,
+    lastName: admin.lastName,
+    status: admin.status,
+  };
 };
 
 export const updateAdmin = async (userId, { roleId, status, password }) => {
-  const admin = await prisma.user.findFirst({
-    where: { id: userId, role: 'PLATFORM_ADMIN', deletedAt: null },
-  });
+  const admin = asDoc(await User.findOne({ _id: userId, role: ROLES.PLATFORM_ADMIN, ...notDeleted }));
   if (!admin) throw new NotFoundError('Sub-admin not found');
 
   if (roleId) await assertPlatformRole(roleId);
@@ -232,17 +345,15 @@ export const updateAdmin = async (userId, { roleId, status, password }) => {
   if (status) data.status = status;
   if (password) data.password = await hashPassword(password);
 
-  await prisma.$transaction(async (tx) => {
-    if (Object.keys(data).length) {
-      await tx.user.update({ where: { id: userId }, data });
-    }
-    if (roleId) {
-      await tx.userRoleAssignment.deleteMany({
-        where: { userId, role: { scope: 'platform' } },
-      });
-      await tx.userRoleAssignment.create({ data: { userId, roleId } });
-    }
-  });
+  if (Object.keys(data).length) {
+    await updateById(User, userId, data);
+  }
+  if (roleId) {
+    const platformRoles = await Role.find({ scope: 'platform' }).select('_id');
+    const roleIds = platformRoles.map((r) => r._id);
+    await UserRoleAssignment.deleteMany({ userId, roleId: { $in: roleIds } });
+    await createDoc(UserRoleAssignment, { userId, roleId });
+  }
 
   return { id: userId };
 };

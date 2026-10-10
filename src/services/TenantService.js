@@ -1,5 +1,10 @@
-import prisma from '../config/database.js';
+import { Tenant, Gym } from '../schemas/index.js';
 import * as TenantModel from '../models/TenantModel.js';
+import { paginate } from '../helpers/pagination.js';
+import { asDoc, updateById, updateMany } from '../helpers/document.js';
+import { lookupOne, lookupMany, notDeleted, textSearch } from '../helpers/query.js';
+import { COLLECTIONS, SORT } from '../helpers/constants.js';
+import { tenantPublic } from '../projections/tenant.projection.js';
 import { NotFoundError, ForbiddenError, BadRequestError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 import { normalizeTenantFeatures } from '../constants/tenantFeatures.js';
@@ -39,73 +44,98 @@ export const update = async (tenantId, userId, data) => {
   });
 };
 
+const listLookups = [
+  ...lookupOne(COLLECTIONS.USERS, 'ownerId', 'owner', {
+    _id: 0,
+    id: '$_id',
+    email: 1,
+    firstName: 1,
+    lastName: 1,
+    phone: 1,
+    status: 1,
+  }),
+  {
+    $lookup: {
+      from: COLLECTIONS.SUBSCRIPTIONS,
+      let: { tid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$tenantId', '$$tid'] } } },
+        ...lookupOne(COLLECTIONS.SUBSCRIPTION_PLANS, 'planId', 'plan', {
+          _id: 0,
+          id: '$_id',
+          name: 1,
+          type: 1,
+          gymLimit: 1,
+        }),
+        {
+          $project: {
+            _id: 0,
+            id: '$_id',
+            status: 1,
+            currentPeriodEnd: 1,
+            plan: 1,
+          },
+        },
+      ],
+      as: 'subscription',
+    },
+  },
+  { $unwind: { path: '$subscription', preserveNullAndEmptyArrays: true } },
+  {
+    $lookup: {
+      from: COLLECTIONS.GYMS,
+      let: { tid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$tenantId', '$$tid'] }, deletedAt: null } },
+        { $sort: { createdAt: 1 } },
+        {
+          $project: {
+            _id: 0,
+            id: '$_id',
+            name: 1,
+            slug: 1,
+            appAlias: 1,
+            appPublished: 1,
+            adsEnabled: 1,
+            appAds: 1,
+            commercialAddons: 1,
+          },
+        },
+      ],
+      as: 'gyms',
+    },
+  },
+  lookupMany(COLLECTIONS.USERS, '_id', 'tenantId', '_users', [
+    { $match: notDeleted },
+    { $project: { _id: 1 } },
+  ]),
+];
+
 export const listTenants = async (query) => {
   const pagination = parsePagination(query);
   const search = (query.search || pagination.search || '').trim();
 
-  const where = { deletedAt: null };
+  const match = { ...notDeleted };
 
-  if (query.status === 'ACTIVE') where.isActive = true;
-  if (query.status === 'INACTIVE') where.isActive = false;
+  if (query.status === 'ACTIVE') match.isActive = true;
+  if (query.status === 'INACTIVE') match.isActive = false;
 
-  if (search) {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { slug: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } },
-      { phone: { contains: search, mode: 'insensitive' } },
-    ];
-  }
+  Object.assign(match, textSearch(search, ['name', 'slug', 'email', 'phone']));
 
-  const [items, total] = await Promise.all([
-    prisma.tenant.findMany({
-      where,
-      include: {
-        owner: {
-          select: {
-            id: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-            phone: true,
-            status: true,
-          },
-        },
-        subscription: {
-          select: {
-            status: true,
-            currentPeriodEnd: true,
-            plan: {
-              select: {
-                id: true,
-                name: true,
-                type: true,
-                gymLimit: true,
-              },
-            },
-          },
-        },
-        gyms: {
-          where: { deletedAt: null },
-          orderBy: { createdAt: 'asc' },
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            appAlias: true,
-            appPublished: true,
-            adsEnabled: true,
-            commercialAddons: true,
-          },
-        },
-        _count: { select: { gyms: true, users: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      skip: pagination.skip,
-      take: pagination.limit,
-    }),
-    prisma.tenant.count({ where }),
-  ]);
+  const { data: items, pagination: pageMeta } = await paginate(Tenant, {
+    match,
+    lookups: listLookups,
+    project: {
+      ...tenantPublic,
+      owner: 1,
+      subscription: 1,
+      gyms: 1,
+      userCount: { $size: '$_users' },
+    },
+    sort: SORT.CREATED_DESC,
+    page: pagination.page,
+    limit: pagination.limit,
+  });
 
   return {
     tenants: items.map((t) => ({
@@ -121,16 +151,16 @@ export const listTenants = async (query) => {
       updatedAt: t.updatedAt,
       owner: t.owner,
       subscription: t.subscription,
-      gymCount: t.gyms.length,
-      userCount: t._count.users,
-      primaryGym: t.gyms[0] || null,
-      gyms: t.gyms.map((gym) => ({
+      gymCount: t.gyms?.length || 0,
+      userCount: t.userCount || 0,
+      primaryGym: t.gyms?.[0] || null,
+      gyms: (t.gyms || []).map((gym) => ({
         id: gym.id,
         name: gym.name,
         commercialAddons: gym.commercialAddons,
       })),
     })),
-    pagination: buildPaginationMeta(total, pagination.page, pagination.limit),
+    pagination: buildPaginationMeta(pageMeta.total, pagination.page, pagination.limit),
   };
 };
 
@@ -139,21 +169,16 @@ export const updateTenantStatus = async (tenantId, isActive) => {
     throw new BadRequestError('isActive must be a boolean');
   }
 
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: tenantId, deletedAt: null },
-  });
+  const tenant = asDoc(await Tenant.findOne({ _id: tenantId, ...notDeleted }));
   if (!tenant) throw new NotFoundError('Tenant not found');
 
-  return prisma.tenant.update({
-    where: { id: tenantId },
-    data: { isActive },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      isActive: true,
-    },
-  });
+  const updated = await updateById(Tenant, tenantId, { isActive });
+  return {
+    id: updated.id,
+    name: updated.name,
+    slug: updated.slug,
+    isActive: updated.isActive,
+  };
 };
 
 const ADDON_KEYS = ['attendance', 'store', 'day_pass'];
@@ -168,9 +193,7 @@ const readAddons = (value) => {
 };
 
 export const updateGymAddons = async (tenantId, gymId, addonsInput) => {
-  const gym = await prisma.gym.findFirst({
-    where: { id: gymId, tenantId, deletedAt: null },
-  });
+  const gym = asDoc(await Gym.findOne({ _id: gymId, tenantId, ...notDeleted }));
   if (!gym) throw new NotFoundError('Gym not found');
 
   const next = readAddons(gym.commercialAddons);
@@ -178,19 +201,17 @@ export const updateGymAddons = async (tenantId, gymId, addonsInput) => {
     if (typeof addonsInput?.[key] === 'boolean') next[key] = addonsInput[key];
   }
 
-  const updated = await prisma.gym.update({
-    where: { id: gymId },
-    data: { commercialAddons: next },
-    select: { id: true, name: true, commercialAddons: true },
-  });
+  const updated = await updateById(Gym, gymId, { commercialAddons: next });
 
-  return { ...updated, commercialAddons: readAddons(updated.commercialAddons) };
+  return {
+    id: updated.id,
+    name: updated.name,
+    commercialAddons: readAddons(updated.commercialAddons),
+  };
 };
 
 export const updateTenantFeatures = async (tenantId, featuresInput) => {
-  const tenant = await prisma.tenant.findFirst({
-    where: { id: tenantId, deletedAt: null },
-  });
+  const tenant = asDoc(await Tenant.findOne({ _id: tenantId, ...notDeleted }));
   if (!tenant) throw new NotFoundError('Tenant not found');
 
   const features = normalizeTenantFeatures({
@@ -198,24 +219,17 @@ export const updateTenantFeatures = async (tenantId, featuresInput) => {
     ...featuresInput,
   });
 
-  const updated = await prisma.tenant.update({
-    where: { id: tenantId },
-    data: { features },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      features: true,
-    },
-  });
+  const updated = await updateById(Tenant, tenantId, { features });
 
-  await prisma.gym.updateMany({
-    where: { tenantId, deletedAt: null },
-    data: { adsEnabled: features.banners },
+  await updateMany(Gym, { tenantId, ...notDeleted }, {
+    adsEnabled: features.banners,
+    'appAds.banners': features.banners,
   });
 
   return {
-    ...updated,
+    id: updated.id,
+    name: updated.name,
+    slug: updated.slug,
     features: normalizeTenantFeatures(updated.features),
   };
 };

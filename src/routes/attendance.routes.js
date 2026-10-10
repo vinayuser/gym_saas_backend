@@ -12,6 +12,7 @@ router.use(authenticate, resolveTenant);
 const roles = ['SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST'];
 
 router.get('/:gymId/attendance', requireRoles(...roles), validate(gymIdParamSchema), AttendanceController.list);
+router.get('/:gymId/attendance/lookup', requireRoles(...roles), validate(gymIdParamSchema), AttendanceController.lookup);
 router.post('/:gymId/attendance/check-in', requireRoles(...roles), validate(checkInSchema), AttendanceController.checkIn);
 
 export default router;

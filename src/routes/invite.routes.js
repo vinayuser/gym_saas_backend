@@ -11,7 +11,9 @@ import {
   checkoutSchema,
   verifyPaymentSchema,
   listInvitesQuerySchema,
+  inviteRecordsQuerySchema,
   publishAppSchema,
+  appAdsSchema,
 } from '../validators/invite.validator.js';
 
 const router = Router();
@@ -34,10 +36,12 @@ router.use(authenticate);
 
 router.get('/', requirePlatform('businesses.view', 'dashboard.view'), validate(listInvitesQuerySchema), InviteController.list);
 router.get('/:id/overview', requirePlatform('businesses.view'), validate(inviteIdParamSchema), InviteController.getOverview);
+router.get('/:id/records', requirePlatform('businesses.view'), validate(inviteRecordsQuerySchema), InviteController.listRecords);
 router.post('/', requirePlatform('businesses.manage'), validate(createInviteSchema), InviteController.create);
 router.patch('/:id/sent', requirePlatform('businesses.manage'), validate(inviteIdParamSchema), InviteController.markSent);
 router.patch('/:id/revoke', requirePlatform('businesses.manage'), validate(inviteIdParamSchema), InviteController.revoke);
 router.get('/:id/publish', requirePlatform('businesses.view'), validate(inviteIdParamSchema), AppPublishController.getPublish);
 router.put('/:id/publish', requirePlatform('businesses.manage'), validate(publishAppSchema), AppPublishController.updatePublish);
+router.put('/:id/app-ads', requirePlatform('businesses.manage'), validate(appAdsSchema), AppPublishController.updateAppAds);
 
 export default router;

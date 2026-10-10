@@ -1,4 +1,7 @@
-import prisma from '../config/database.js';
+import { Role, Permission, RolePermission } from '../schemas/index.js';
+import { asDoc } from '../helpers/document.js';
+import { COLLECTIONS } from '../helpers/constants.js';
+import { rolePublic, permissionPublic } from '../projections/invite.projection.js';
 import { NotFoundError } from '../utils/errors.js';
 
 const DEFAULT_GRANTS = {
@@ -39,27 +42,47 @@ const ROLE_DESCRIPTIONS = {
   member: 'Member access only. No owner dashboard.',
 };
 
+const roleLookups = [
+  {
+    $lookup: {
+      from: COLLECTIONS.ROLE_PERMISSIONS,
+      let: { rid: '$_id' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$roleId', '$$rid'] } } },
+        { $project: { _id: 0, id: '$_id', permissionId: 1 } },
+      ],
+      as: 'permissions',
+    },
+  },
+];
+
 const ensureAssignments = async () => {
-  const linkCount = await prisma.rolePermission.count();
+  const linkCount = await RolePermission.countDocuments();
   if (linkCount > 0) return;
 
   const [roles, permissions] = await Promise.all([
-    prisma.role.findMany(),
-    prisma.permission.findMany(),
+    Role.find(),
+    Permission.find(),
   ]);
-  const bySlug = Object.fromEntries(permissions.map((item) => [item.slug, item.id]));
+  const bySlug = Object.fromEntries(permissions.map((item) => [item.slug, item._id]));
 
   for (const role of roles) {
     const grants = DEFAULT_GRANTS[role.slug];
     const ids =
       grants === '*'
-        ? permissions.map((item) => item.id)
+        ? permissions.map((item) => item._id)
         : (grants || []).map((slug) => bySlug[slug]).filter(Boolean);
     if (!ids.length) continue;
-    await prisma.rolePermission.createMany({
-      data: ids.map((permissionId) => ({ roleId: role.id, permissionId })),
-      skipDuplicates: true,
-    });
+    await RolePermission.bulkWrite(
+      ids.map((permissionId) => ({
+        updateOne: {
+          filter: { roleId: role._id, permissionId },
+          update: { $setOnInsert: { roleId: role._id, permissionId } },
+          upsert: true,
+        },
+      })),
+      { ordered: false }
+    );
   }
 };
 
@@ -69,43 +92,44 @@ const mapRole = (role) => ({
   slug: role.slug,
   description: role.description || ROLE_DESCRIPTIONS[role.slug] || '',
   isSystem: role.isSystem,
-  permissionIds: role.permissions.map((link) => link.permissionId),
+  permissionIds: (role.permissions || []).map((link) => link.permissionId),
 });
+
+const loadRole = (id) =>
+  Role.aggregate([
+    { $match: { _id: id } },
+    ...roleLookups,
+    { $project: rolePublic },
+  ]).then((rows) => rows[0] || null);
 
 export const listRoles = async () => {
   await ensureAssignments();
-  const [roles, permissions] = await Promise.all([
-    prisma.role.findMany({
-      include: { permissions: true },
-      orderBy: { name: 'asc' },
-    }),
-    prisma.permission.findMany({ orderBy: [{ module: 'asc' }, { name: 'asc' }] }),
+  const [roles, permissionDocs] = await Promise.all([
+    Role.aggregate([{ $sort: { name: 1 } }, ...roleLookups, { $project: rolePublic }]),
+    Permission.aggregate([{ $sort: { module: 1, name: 1 } }, { $project: permissionPublic }]),
   ]);
 
   return {
     roles: roles.map(mapRole),
-    permissions,
+    permissions: permissionDocs,
   };
 };
 
 export const setRolePermission = async (roleId, permissionId, enabled) => {
-  const role = await prisma.role.findUnique({ where: { id: roleId } });
-  const permission = await prisma.permission.findUnique({ where: { id: permissionId } });
+  const role = asDoc(await Role.findById(roleId));
+  const permission = asDoc(await Permission.findById(permissionId));
   if (!role || !permission) throw new NotFoundError('Role or permission not found');
 
   if (enabled) {
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId, permissionId } },
-      update: {},
-      create: { roleId, permissionId },
-    });
+    await RolePermission.findOneAndUpdate(
+      { roleId, permissionId },
+      { $setOnInsert: { roleId, permissionId } },
+      { upsert: true }
+    );
   } else {
-    await prisma.rolePermission.deleteMany({ where: { roleId, permissionId } });
+    await RolePermission.deleteMany({ roleId, permissionId });
   }
 
-  const updated = await prisma.role.findUnique({
-    where: { id: roleId },
-    include: { permissions: true },
-  });
+  const updated = await loadRole(roleId);
   return mapRole(updated);
 };

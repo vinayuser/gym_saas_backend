@@ -1,9 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
-import prisma from '../config/database.js';
 import * as UserModel from '../models/UserModel.js';
 import * as AuthModel from '../models/AuthModel.js';
 import * as TenantModel from '../models/TenantModel.js';
 import * as GymModel from '../models/GymModel.js';
+import { User, Tenant, Subscription, SubscriptionPlan } from '../schemas/index.js';
+import { createDoc, updateById } from '../helpers/document.js';
+import { aggregateOne } from '../helpers/pagination.js';
+import { lookupOne, notDeleted } from '../helpers/query.js';
+import { COLLECTIONS } from '../helpers/constants.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken, signTwoFactorPendingToken, verifyTwoFactorPendingToken } from '../utils/jwt.js';
 import {
@@ -71,11 +75,40 @@ const issueTokens = async (userId, email, role, tenantId, sessionMeta = {}) => {
   return { accessToken, refreshToken };
 };
 
-const completeLogin = async (user, sessionMeta) => {
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLoginAt: new Date() },
+const loadUserForLogin = (match) =>
+  aggregateOne(User, {
+    match: { ...match, ...notDeleted },
+    lookups: lookupOne(COLLECTIONS.TENANTS, 'tenantId', 'tenant', {
+      _id: 0,
+      id: '$_id',
+      name: 1,
+      slug: 1,
+      isActive: 1,
+      features: 1,
+    }),
+    project: {
+      _id: 0,
+      id: '$_id',
+      tenantId: 1,
+      email: 1,
+      password: 1,
+      firstName: 1,
+      lastName: 1,
+      phone: 1,
+      avatar: 1,
+      role: 1,
+      status: 1,
+      emailVerified: 1,
+      twoFactorEnabled: 1,
+      totpSecret: 1,
+      notificationPreferences: 1,
+      lastLoginAt: 1,
+      tenant: 1,
+    },
   });
+
+const completeLogin = async (user, sessionMeta) => {
+  await AuthModel.touchUserLogin(user.id);
 
   const tokens = await issueTokens(user.id, user.email, user.role, user.tenantId, sessionMeta);
   const gyms = await loadGymsForTenant(user.tenantId);
@@ -111,66 +144,54 @@ export const register = async ({ email, password, firstName, lastName, phone, bu
 
   const hashedPassword = await hashPassword(password);
 
-  const trialPlan = await prisma.subscriptionPlan.findFirst({
-    where: { type: 'SINGLE_GYM', isActive: true },
+  const trialPlan = await aggregateOne(SubscriptionPlan, {
+    match: { type: 'SINGLE_GYM', isActive: true },
+    project: { _id: 0, id: '$_id' },
   });
 
-  const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        email: normalizedEmail,
-        password: hashedPassword,
-        firstName,
-        lastName,
-        phone,
-        role: 'GYM_OWNER',
-        status: 'PENDING_VERIFICATION',
-      },
-    });
-
-    const tenant = await tx.tenant.create({
-      data: {
-        name: businessName,
-        slug,
-        email: normalizedEmail,
-        phone,
-        ownerId: user.id,
-      },
-    });
-
-    await tx.user.update({
-      where: { id: user.id },
-      data: { tenantId: tenant.id },
-    });
-
-    if (trialPlan) {
-      const trialEnd = new Date();
-      trialEnd.setDate(trialEnd.getDate() + 14);
-
-      await tx.subscription.create({
-        data: {
-          tenantId: tenant.id,
-          planId: trialPlan.id,
-          status: 'TRIAL',
-          trialEndsAt: trialEnd,
-          currentPeriodStart: new Date(),
-          currentPeriodEnd: trialEnd,
-        },
-      });
-    }
-
-    const otp = generateOtp();
-    await tx.otpVerification.create({
-      data: {
-        userId: user.id,
-        code: otp,
-        type: 'email_verify',
-        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
-      },
-    });
-
-    return { user, tenant, otp };
+  const user = await createDoc(User, {
+    email: normalizedEmail,
+    password: hashedPassword,
+    firstName,
+    lastName,
+    phone,
+    role: 'GYM_OWNER',
+    status: 'PENDING_VERIFICATION',
   });
+
+  const tenant = await createDoc(Tenant, {
+    name: businessName,
+    slug,
+    email: normalizedEmail,
+    phone,
+    ownerId: user.id,
+  });
+
+  await updateById(User, user.id, { tenantId: tenant.id });
+
+  if (trialPlan) {
+    const trialEnd = new Date();
+    trialEnd.setDate(trialEnd.getDate() + 14);
+
+    await createDoc(Subscription, {
+      tenantId: tenant.id,
+      planId: trialPlan.id,
+      status: 'TRIAL',
+      trialEndsAt: trialEnd,
+      currentPeriodStart: new Date(),
+      currentPeriodEnd: trialEnd,
+    });
+  }
+
+  const otp = generateOtp();
+  await AuthModel.createOtp({
+    userId: user.id,
+    code: otp,
+    type: 'email_verify',
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+  });
+
+  const result = { user, tenant, otp };
 
   const tokens = await issueTokens(result.user.id, result.user.email, result.user.role, result.tenant.id);
 
@@ -184,10 +205,7 @@ export const register = async ({ email, password, firstName, lastName, phone, bu
 
 export const login = async ({ email, password }, sessionMeta = {}) => {
   const normalizedEmail = email.toLowerCase();
-  const user = await prisma.user.findFirst({
-    where: { email: normalizedEmail, deletedAt: null },
-    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true, features: true } } },
-  });
+  const user = await loadUserForLogin({ email: normalizedEmail });
 
   if (!user) {
     throw new UnauthorizedError('Invalid email or password');
@@ -220,10 +238,7 @@ export const verifyTwoFactorLogin = async ({ twoFactorToken, code }, sessionMeta
     throw new UnauthorizedError('Two-factor session expired. Please sign in again.');
   }
 
-  const user = await prisma.user.findFirst({
-    where: { id: payload.userId, deletedAt: null },
-    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true, features: true } } },
-  });
+  const user = await loadUserForLogin({ _id: payload.userId });
 
   if (!user?.twoFactorEnabled || !user.totpSecret) {
     throw new BadRequestError('Two-factor authentication is not enabled');

@@ -1,4 +1,9 @@
-import prisma from '../config/database.js';
+import * as InviteModel from '../models/InviteModel.js';
+import { Gym } from '../schemas/index.js';
+import { asDoc, updateById, updateMany } from '../helpers/document.js';
+import { notDeleted } from '../helpers/query.js';
+import { APP_AD_CHANNELS } from '../helpers/constants.js';
+import { normalizeAppAds } from '../helpers/appAds.js';
 import {
   BadRequestError,
   ConflictError,
@@ -14,37 +19,31 @@ const normalizeAlias = (value) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 
-const mapPublish = (gym) => ({
-  gymId: gym.id,
-  gymName: gym.name,
-  slug: gym.slug,
-  appAlias: gym.appAlias,
-  appPublished: gym.appPublished,
-  adsEnabled: gym.adsEnabled,
-  isActive: gym.isActive,
-  tenant: gym.tenant
-    ? { id: gym.tenant.id, name: gym.tenant.name, slug: gym.tenant.slug }
-    : null,
+const mapPublish = (gym) => {
+  const appAds = normalizeAppAds(gym.appAds, gym.adsEnabled);
+  return {
+    gymId: gym.id,
+    gymName: gym.name,
+    slug: gym.slug,
+    appAlias: gym.appAlias,
+    appPublished: gym.appPublished,
+    adsEnabled: appAds.banners,
+    appAds,
+    isActive: gym.isActive,
+    tenant: gym.tenant
+      ? { id: gym.tenant.id, name: gym.tenant.name, slug: gym.tenant.slug }
+      : null,
+  };
+};
+
+const mapGymAds = (gym) => ({
+  id: gym.id,
+  name: gym.name,
+  appAds: normalizeAppAds(gym.appAds, gym.adsEnabled),
 });
 
 const getInviteGym = async (inviteId) => {
-  const invite = await prisma.gymInvite.findUnique({
-    where: { id: inviteId },
-    include: {
-      tenant: {
-        include: {
-          gyms: {
-            where: { deletedAt: null },
-            orderBy: { createdAt: 'asc' },
-            take: 1,
-            include: {
-              tenant: { select: { id: true, name: true, slug: true } },
-            },
-          },
-        },
-      },
-    },
-  });
+  const invite = await InviteModel.findById(inviteId);
 
   if (!invite) throw new NotFoundError('Invite not found');
   if (invite.status !== 'ACCEPTED' || !invite.tenantId) {
@@ -54,7 +53,7 @@ const getInviteGym = async (inviteId) => {
   const gym = invite.tenant?.gyms?.[0];
   if (!gym) throw new NotFoundError('No gym found for this invite');
 
-  return { invite, gym };
+  return { invite, gym: { ...gym, tenant: invite.tenant } };
 };
 
 export const getPublishByInvite = async (inviteId) => {
@@ -87,14 +86,13 @@ export const updatePublishByInvite = async (inviteId, body) => {
       throw new BadRequestError('Alias must be lowercase letters, numbers, and hyphens only');
     }
 
-    const taken = await prisma.gym.findFirst({
-      where: {
+    const taken = asDoc(
+      await Gym.findOne({
         appAlias: alias,
-        id: { not: gym.id },
-        deletedAt: null,
-      },
-      select: { id: true },
-    });
+        _id: { $ne: gym.id },
+        ...notDeleted,
+      }).select('_id')
+    );
     if (taken) throw new ConflictError('This app alias is already in use');
 
     data.appAlias = alias;
@@ -103,6 +101,7 @@ export const updatePublishByInvite = async (inviteId, body) => {
 
   if (typeof body.adsEnabled === 'boolean') {
     data.adsEnabled = body.adsEnabled;
+    data['appAds.banners'] = body.adsEnabled;
   }
 
   if (typeof body.appPublished === 'boolean' && !data.appPublished) {
@@ -116,13 +115,44 @@ export const updatePublishByInvite = async (inviteId, body) => {
     throw new BadRequestError('Nothing to update');
   }
 
-  const updated = await prisma.gym.update({
-    where: { id: gym.id },
-    data,
-    include: {
-      tenant: { select: { id: true, name: true, slug: true } },
-    },
-  });
+  const updated = await updateById(Gym, gym.id, data);
+  return mapPublish({ ...updated, tenant: gym.tenant });
+};
 
-  return mapPublish(updated);
+export const updateAppAdsByInvite = async (inviteId, body) => {
+  const invite = await InviteModel.findById(inviteId);
+  if (!invite) throw new NotFoundError('Invite not found');
+  if (invite.status !== 'ACCEPTED' || !invite.tenantId) {
+    throw new BadRequestError('App ads can only be managed after the invite is accepted');
+  }
+
+  const gyms = invite.tenant?.gyms || [];
+  if (!gyms.length) throw new NotFoundError('No gym found for this invite');
+
+  if (body.gymId && !gyms.some((gym) => gym.id === body.gymId)) {
+    throw new NotFoundError('Gym not found for this invite');
+  }
+
+  const $set = {};
+  for (const key of APP_AD_CHANNELS) {
+    if (typeof body[key] === 'boolean') $set[`appAds.${key}`] = body[key];
+  }
+  if (typeof body.banners === 'boolean') $set.adsEnabled = body.banners;
+
+  if (Object.keys($set).length === 0) {
+    throw new BadRequestError('Provide at least one app ad flag');
+  }
+
+  const match = {
+    tenantId: invite.tenantId,
+    ...notDeleted,
+    ...(body.gymId ? { _id: body.gymId } : {}),
+  };
+  await updateMany(Gym, match, $set);
+
+  const rows = await Gym.find({ tenantId: invite.tenantId, ...notDeleted })
+    .select('name appAds adsEnabled')
+    .sort({ createdAt: 1 });
+
+  return { gyms: rows.map((row) => mapGymAds(asDoc(row))) };
 };

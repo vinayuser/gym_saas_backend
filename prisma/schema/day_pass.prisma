@@ -1,0 +1,20 @@
+// Walk-in day passes (optional commercial add-on)
+
+model DayPass {
+  id          String    @id @default(uuid())
+  gymId       String
+  guestName   String
+  phone       String?
+  email       String?
+  amount      Decimal   @db.Decimal(10, 2)
+  paid        Boolean   @default(true)
+  validOn     DateTime
+  checkedInAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  gym Gym @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, validOn])
+  @@map("day_passes")
+}

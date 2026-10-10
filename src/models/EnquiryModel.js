@@ -1,33 +1,39 @@
-import prisma from '../config/database.js';
+import { Enquiry } from '../schemas/index.js';
+import { aggregateOne, groupCount } from '../helpers/pagination.js';
+import { createDoc, updateById, asDoc } from '../helpers/document.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS, SORT } from '../helpers/constants.js';
+import { enquiryPublic } from '../projections/ops.projection.js';
+import { userBrief } from '../projections/user.projection.js';
 
-export const findMany = (tenantId, gymId, { status } = {}) => {
-  const where = {
-    tenantId,
-    ...(gymId ? { gymId } : {}),
-    ...(status ? { status } : {}),
-  };
-  return prisma.enquiry.findMany({
-    where,
-    orderBy: { createdAt: 'desc' },
-    include: {
-      assignedTo: { select: { id: true, firstName: true, lastName: true } },
-    },
-  });
-};
+const scope = (tenantId, gymId) => ({
+  deletedAt: null,
+  ...(tenantId ? { tenantId } : {}),
+  ...(gymId ? { gymId } : {}),
+});
+
+export const findMany = (tenantId, gymId) =>
+  Enquiry.aggregate([
+    { $match: scope(tenantId, gymId) },
+    { $sort: SORT.CREATED_DESC },
+    ...lookupOne(COLLECTIONS.USERS, 'assignedToId', 'assignedTo', userBrief),
+    { $project: enquiryPublic },
+  ]);
 
 export const findById = (id, tenantId) =>
-  prisma.enquiry.findFirst({
-    where: { id, tenantId },
-    include: { assignedTo: { select: { id: true, firstName: true, lastName: true } } },
+  aggregateOne(Enquiry, {
+    match: { _id: id, ...(tenantId ? { tenantId } : {}) },
+    lookups: lookupOne(COLLECTIONS.USERS, 'assignedToId', 'assignedTo', userBrief),
+    project: enquiryPublic,
   });
 
-export const create = (data) => prisma.enquiry.create({ data });
-export const update = (id, data) => prisma.enquiry.update({ where: { id }, data });
-export const remove = (id) => prisma.enquiry.delete({ where: { id } });
+export const create = (data) => createDoc(Enquiry, data);
+export const update = (id, data) => updateById(Enquiry, id, data);
+export const remove = async (id) => asDoc(await Enquiry.findByIdAndDelete(id));
 
-export const countByStatus = (tenantId, gymId) =>
-  prisma.enquiry.groupBy({
-    by: ['status'],
-    where: { tenantId, ...(gymId ? { gymId } : {}) },
-    _count: true,
-  });
+export const statsByStatus = (gymId) => groupCount(Enquiry, { match: { gymId, deletedAt: null }, by: 'status' });
+
+export const countByStatus = async (tenantId, gymId) => {
+  const rows = await groupCount(Enquiry, { match: scope(tenantId, gymId), by: 'status' });
+  return rows.map((row) => ({ status: row._id, _count: row.count }));
+};

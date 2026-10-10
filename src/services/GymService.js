@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as GymModel from '../models/GymModel.js';
 import { NotFoundError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
+import { DEFAULT_APP_ADS } from '../helpers/constants.js';
 
 const slugify = (text) =>
   text
@@ -39,6 +40,8 @@ export const create = async (tenantId, data) => {
     qrCodeSecret: uuidv4(),
     images: [],
     commercialAddons: EMPTY_ADDONS,
+    appAds: { ...DEFAULT_APP_ADS },
+    adsEnabled: true,
   });
 };
 

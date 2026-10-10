@@ -5,6 +5,7 @@ const storage = multer.memoryStorage();
 
 const imageTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const videoTypes = ['video/mp4', 'video/webm', 'video/quicktime'];
+const audioTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/aac', 'audio/ogg'];
 const documentTypes = ['application/pdf'];
 
 export const uploadSingle = (fieldName = 'file') =>
@@ -15,11 +16,12 @@ export const uploadSingle = (fieldName = 'file') =>
       const ok =
         imageTypes.includes(file.mimetype) ||
         videoTypes.includes(file.mimetype) ||
+        audioTypes.includes(file.mimetype) ||
         documentTypes.includes(file.mimetype);
       if (!ok) {
         return cb(
           new BadRequestError(
-            'Only images (JPEG, PNG, WebP, GIF), PDF documents, and videos (MP4, WebM) are allowed'
+            'Only images (JPEG, PNG, WebP, GIF), PDF documents, videos (MP4, WebM), and audio (MP3, WAV, M4A) are allowed'
           )
         );
       }
@@ -41,6 +43,7 @@ export const uploadMultiple = (fieldName = 'files', maxCount = 5) =>
 
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+export const AUDIO_MAX_BYTES = 10 * 1024 * 1024;
 
 export const assertFileSize = (file, maxBytes) => {
   if (file.size > maxBytes) {

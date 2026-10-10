@@ -1,10 +1,15 @@
 import * as SupportModel from '../models/SupportModel.js';
 import * as EmailService from '../services/EmailService.js';
-import { ForbiddenError, NotFoundError } from '../utils/errors.js';
+import { Tenant } from '../schemas/index.js';
+import { asDoc } from '../helpers/document.js';
+import { notDeleted, textSearch } from '../helpers/query.js';
+import { ROLES } from '../helpers/constants.js';
+import { BadRequestError, ForbiddenError, NotFoundError } from '../utils/errors.js';
 import logger from '../utils/logger.js';
-import prisma from '../config/database.js';
 
-const serializeTicket = (ticket) => ({
+const isPlatform = (user) => user?.role === ROLES.SUPER_ADMIN || user?.role === ROLES.PLATFORM_ADMIN;
+
+const serializeTicket = (ticket, messages = undefined) => ({
   id: ticket.id,
   category: ticket.category,
   subject: ticket.subject,
@@ -26,9 +31,51 @@ const serializeTicket = (ticket) => ({
         role: ticket.user.role,
       }
     : null,
+  ...(messages ? { messages } : {}),
 });
 
+const serializeMessage = (row) => ({
+  id: row.id,
+  ticketId: row.ticketId,
+  userId: row.userId,
+  authorRole: row.authorRole,
+  authorName: row.authorName || '',
+  body: row.body,
+  createdAt: row.createdAt,
+});
+
+const assertCanAccess = (user, ticket) => {
+  if (isPlatform(user)) return;
+  if (ticket.userId === user.id) return;
+  if (user.tenantId && ticket.tenantId === user.tenantId) return;
+  throw new ForbiddenError('You cannot open this ticket');
+};
+
+const seedOpeningMessage = async (ticket) => {
+  if (!ticket?.message) return;
+  await SupportModel.createMessage({
+    ticketId: ticket.id,
+    userId: ticket.userId,
+    authorRole: 'OWNER',
+    authorName: ticket.senderName || ticket.user?.name || 'Gym owner',
+    body: ticket.message,
+  });
+};
+
+const loadMessages = async (ticket) => {
+  let rows = await SupportModel.listMessages(ticket.id);
+  if (!rows.length && ticket.message) {
+    await seedOpeningMessage(ticket);
+    rows = await SupportModel.listMessages(ticket.id);
+  }
+  return rows.map(serializeMessage);
+};
+
 export const create = async (user, body) => {
+  if (isPlatform(user)) {
+    throw new ForbiddenError('Platform admins reply to tickets; they do not open them');
+  }
+
   const senderName = [user.firstName, user.lastName].filter(Boolean).join(' ');
 
   let ticket = await SupportModel.create({
@@ -41,11 +88,10 @@ export const create = async (user, body) => {
     senderName: senderName || null,
   });
 
+  await seedOpeningMessage(ticket);
+
   const tenant = user.tenantId
-    ? await prisma.tenant.findFirst({
-        where: { id: user.tenantId, deletedAt: null },
-        select: { id: true, name: true, email: true },
-      })
+    ? asDoc(await Tenant.findOne({ _id: user.tenantId, ...notDeleted }).select('name email'))
     : null;
 
   try {
@@ -57,7 +103,7 @@ export const create = async (user, body) => {
     logger.warn('Support ticket email failed', { ticketId: ticket.id, err: err.message });
   }
 
-  return serializeTicket(ticket);
+  return serializeTicket(ticket, await loadMessages(ticket));
 };
 
 export const list = async (user, query) => {
@@ -66,7 +112,7 @@ export const list = async (user, query) => {
   const skip = (page - 1) * limit;
 
   const where = {};
-  if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_ADMIN') {
+  if (!isPlatform(user)) {
     if (!user.tenantId) {
       where.userId = user.id;
     } else {
@@ -83,13 +129,7 @@ export const list = async (user, query) => {
   }
 
   if (query.search?.trim()) {
-    const search = query.search.trim();
-    where.OR = [
-      { subject: { contains: search, mode: 'insensitive' } },
-      { message: { contains: search, mode: 'insensitive' } },
-      { senderEmail: { contains: search, mode: 'insensitive' } },
-      { senderName: { contains: search, mode: 'insensitive' } },
-    ];
+    Object.assign(where, textSearch(query.search.trim(), ['subject', 'message', 'senderEmail', 'senderName']));
   }
 
   const [tickets, total] = await Promise.all([
@@ -98,13 +138,61 @@ export const list = async (user, query) => {
   ]);
 
   return {
-    tickets: tickets.map(serializeTicket),
+    tickets: tickets.map((ticket) => serializeTicket(ticket)),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
   };
 };
 
+export const getById = async (user, ticketId) => {
+  const ticket = await SupportModel.findById(ticketId);
+  if (!ticket) throw new NotFoundError('Support ticket not found');
+  assertCanAccess(user, ticket);
+  return serializeTicket(ticket, await loadMessages(ticket));
+};
+
+export const reply = async (user, ticketId, body) => {
+  const ticket = await SupportModel.findById(ticketId);
+  if (!ticket) throw new NotFoundError('Support ticket not found');
+  assertCanAccess(user, ticket);
+
+  if (ticket.status === 'CLOSED' && !isPlatform(user)) {
+    throw new BadRequestError('This ticket is closed');
+  }
+
+  const text = String(body.message || '').trim();
+  if (text.length < 1) throw new BadRequestError('Message is required');
+
+  await loadMessages(ticket);
+
+  const authorRole = isPlatform(user) ? 'ADMIN' : 'OWNER';
+  const authorName = [user.firstName, user.lastName].filter(Boolean).join(' ') || (isPlatform(user) ? 'Support' : 'Gym owner');
+
+  await SupportModel.createMessage({
+    ticketId: ticket.id,
+    userId: user.id,
+    authorRole,
+    authorName,
+    body: text,
+  });
+
+  let nextStatus = ticket.status;
+  if (isPlatform(user) && body.status) {
+    nextStatus = body.status;
+  } else if (isPlatform(user) && ticket.status === 'OPEN') {
+    nextStatus = 'IN_PROGRESS';
+  } else if (!isPlatform(user) && (ticket.status === 'RESOLVED' || ticket.status === 'CLOSED')) {
+    nextStatus = 'OPEN';
+  }
+
+  if (nextStatus !== ticket.status) {
+    await SupportModel.update(ticketId, { status: nextStatus });
+  }
+
+  return getById(user, ticketId);
+};
+
 export const updateStatus = async (user, ticketId, status) => {
-  if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_ADMIN') {
+  if (!isPlatform(user)) {
     throw new ForbiddenError('Only platform admins can update ticket status');
   }
 
@@ -112,5 +200,5 @@ export const updateStatus = async (user, ticketId, status) => {
   if (!existing) throw new NotFoundError('Support ticket not found');
 
   const ticket = await SupportModel.update(ticketId, { status });
-  return serializeTicket(ticket);
+  return serializeTicket(ticket, await loadMessages(ticket));
 };

@@ -4,7 +4,7 @@ import { authenticate } from '../middlewares/auth.middleware.js';
 import { resolveTenant } from '../middlewares/tenant.middleware.js';
 import { requireRoles } from '../middlewares/rbac.middleware.js';
 import { validate } from '../middlewares/validate.middleware.js';
-import { createEventSchema, updateEventSchema, eventParamsSchema } from '../validators/event.validator.js';
+import { createEventSchema, updateEventSchema, eventParamsSchema, bookEventSchema } from '../validators/event.validator.js';
 import { gymIdParamSchema } from '../validators/gym.validator.js';
 
 const router = Router({ mergeParams: true });
@@ -16,5 +16,8 @@ router.post('/:gymId/events', requireRoles(...roles), validate(createEventSchema
 router.get('/:gymId/events/:eventId', requireRoles(...roles), validate(eventParamsSchema), EventController.getById);
 router.put('/:gymId/events/:eventId', requireRoles(...roles), validate(updateEventSchema), EventController.update);
 router.delete('/:gymId/events/:eventId', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER'), validate(eventParamsSchema), EventController.remove);
+router.get('/:gymId/events/:eventId/bookings', requireRoles(...roles), validate(eventParamsSchema), EventController.listBookings);
+router.post('/:gymId/events/:eventId/bookings', requireRoles(...roles), validate(bookEventSchema), EventController.book);
+router.delete('/:gymId/events/:eventId/bookings', requireRoles(...roles), validate(bookEventSchema), EventController.cancelBooking);
 
 export default router;

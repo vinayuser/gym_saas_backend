@@ -7,7 +7,13 @@ export const list = asyncHandler(async (req, res) => {
   successResponse(res, result, 'Success', 200, { pagination: result.pagination });
 });
 
+export const lookup = asyncHandler(async (req, res) => {
+  const result = await AttendanceService.lookup(req.tenantId, req.params.gymId, req.query);
+  successResponse(res, result);
+});
+
 export const checkIn = asyncHandler(async (req, res) => {
   const record = await AttendanceService.checkIn(req.tenantId, req.params.gymId, req.body);
-  successResponse(res, record, 'Check-in recorded', 201);
+  const message = record.action === 'CHECK_OUT' ? 'Checked out' : 'Checked in';
+  successResponse(res, record, message, 201);
 });

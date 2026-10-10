@@ -1,4 +1,7 @@
-import prisma from '../config/database.js';
+import { SupportTicket, GymInvite, Enquiry, Member, Gym } from '../schemas/index.js';
+import { asDoc } from '../helpers/document.js';
+import { notDeleted } from '../helpers/query.js';
+import { SORT } from '../helpers/constants.js';
 
 const item = (id, title, message, createdAt, href) => ({
   id,
@@ -9,18 +12,12 @@ const item = (id, title, message, createdAt, href) => ({
 });
 
 const listAdmin = async () => {
-  const [tickets, invites] = await Promise.all([
-    prisma.supportTicket.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 6,
-      select: { id: true, subject: true, senderName: true, status: true, createdAt: true },
-    }),
-    prisma.gymInvite.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 6,
-      select: { id: true, email: true, businessName: true, status: true, createdAt: true },
-    }),
+  const [ticketDocs, inviteDocs] = await Promise.all([
+    SupportTicket.find().sort(SORT.CREATED_DESC).limit(6).select('subject senderName status createdAt'),
+    GymInvite.find().sort(SORT.CREATED_DESC).limit(6).select('email businessName status createdAt'),
   ]);
+  const tickets = ticketDocs.map(asDoc);
+  const invites = inviteDocs.map(asDoc);
 
   return [
     ...tickets.map((ticket) =>
@@ -47,20 +44,18 @@ const listAdmin = async () => {
 const listGym = async (tenantId) => {
   if (!tenantId) return [];
 
-  const [enquiries, members] = await Promise.all([
-    prisma.enquiry.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: 6,
-      select: { id: true, name: true, lastName: true, status: true, createdAt: true },
-    }),
-    prisma.member.findMany({
-      where: { deletedAt: null, gym: { tenantId } },
-      orderBy: { createdAt: 'desc' },
-      take: 6,
-      select: { id: true, firstName: true, lastName: true, createdAt: true },
-    }),
+  const gyms = await Gym.find({ tenantId, ...notDeleted }).select('_id');
+  const gymIds = gyms.map((g) => g._id);
+
+  const [enquiryDocs, memberDocs] = await Promise.all([
+    Enquiry.find({ tenantId }).sort(SORT.CREATED_DESC).limit(6).select('name lastName status createdAt'),
+    Member.find({ gymId: { $in: gymIds }, ...notDeleted })
+      .sort(SORT.CREATED_DESC)
+      .limit(6)
+      .select('firstName lastName createdAt'),
   ]);
+  const enquiries = enquiryDocs.map(asDoc);
+  const members = memberDocs.map(asDoc);
 
   return [
     ...enquiries.map((lead) =>

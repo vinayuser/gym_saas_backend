@@ -1,5 +1,8 @@
-import prisma from '../config/database.js';
+import { Trainer, Event } from '../schemas/index.js';
 import * as GymModel from '../models/GymModel.js';
+import { paginate, countDocuments } from '../helpers/pagination.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS, SORT } from '../helpers/constants.js';
 import { NotFoundError } from '../utils/errors.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
@@ -8,21 +11,95 @@ export const performance = async (tenantId, gymId, query = {}) => {
   if (!gym) throw new NotFoundError('Gym not found');
 
   const pagination = parsePagination(query);
-  const where = { gymId, isActive: true };
-  const [trainers, activeTrainers, sessionRows] = await Promise.all([
-    prisma.trainer.findMany({
-      where,
-      skip: pagination.skip,
-      take: pagination.limit,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { firstName: true, lastName: true, email: true } },
-        events: { include: { _count: { select: { bookings: true } } } },
+  const match = { gymId, isActive: true };
+  const search = (pagination.search || '').trim();
+
+  const [{ data: trainers, pagination: pageMeta }, activeTrainers, sessionAgg] = await Promise.all([
+    paginate(Trainer, {
+      match,
+      before: search
+        ? [
+            ...lookupOne(COLLECTIONS.USERS, 'userId', '_searchUser', {
+              firstName: 1,
+              lastName: 1,
+              email: 1,
+            }),
+            {
+              $match: {
+                $or: [
+                  { '_searchUser.firstName': { $regex: search, $options: 'i' } },
+                  { '_searchUser.lastName': { $regex: search, $options: 'i' } },
+                  { '_searchUser.email': { $regex: search, $options: 'i' } },
+                ],
+              },
+            },
+          ]
+        : [],
+      lookups: [
+        ...lookupOne(COLLECTIONS.USERS, 'userId', 'user', {
+          _id: 0,
+          id: '$_id',
+          firstName: 1,
+          lastName: 1,
+          email: 1,
+        }),
+        {
+          $lookup: {
+            from: COLLECTIONS.EVENTS,
+            let: { tid: '$_id' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$trainerId', '$$tid'] } } },
+              {
+                $lookup: {
+                  from: COLLECTIONS.EVENT_BOOKINGS,
+                  localField: '_id',
+                  foreignField: 'eventId',
+                  as: 'bookings',
+                },
+              },
+              { $project: { bookingCount: { $size: '$bookings' } } },
+            ],
+            as: 'events',
+          },
+        },
+        { $addFields: { sessions: { $sum: '$events.bookingCount' } } },
+      ],
+      project: {
+        _id: 0,
+        id: '$_id',
+        name: {
+          $trim: {
+            input: {
+              $concat: [{ $ifNull: ['$user.firstName', ''] }, ' ', { $ifNull: ['$user.lastName', ''] }],
+            },
+          },
+        },
+        email: '$user.email',
+        specialties: 1,
+        experience: 1,
+        isActive: 1,
+        sessions: 1,
       },
+      sort: SORT.CREATED_DESC,
+      page: pagination.page,
+      limit: pagination.limit,
     }),
-    prisma.trainer.count({ where }),
-    prisma.eventBooking.count({ where: { event: { gymId } } }),
+    countDocuments(Trainer, match),
+    Event.aggregate([
+      { $match: { gymId } },
+      {
+        $lookup: {
+          from: COLLECTIONS.EVENT_BOOKINGS,
+          localField: '_id',
+          foreignField: 'eventId',
+          as: 'bookings',
+        },
+      },
+      { $group: { _id: null, count: { $sum: { $size: '$bookings' } } } },
+    ]),
   ]);
+
+  const sessionRows = sessionAgg[0]?.count || 0;
 
   return {
     summary: {
@@ -31,19 +108,16 @@ export const performance = async (tenantId, gymId, query = {}) => {
       totalSessions: sessionRows,
       efficiency: activeTrainers ? 86 : 0,
     },
-    trainers: trainers.map((t) => {
-      const sessions = t.events.reduce((s, e) => s + e._count.bookings, 0);
-      return {
-        id: t.id,
-        name: `${t.user.firstName} ${t.user.lastName}`.trim(),
-        email: t.user.email,
-        specialties: t.specialties,
-        clients: sessions || 0,
-        sessions,
-        rating: 4.5 + Math.min((t.experience || 0) / 20, 0.5),
-        status: t.isActive ? 'ACTIVE' : 'INACTIVE',
-      };
-    }),
-    pagination: buildPaginationMeta(activeTrainers, pagination.page, pagination.limit),
+    trainers: trainers.map((t) => ({
+      id: t.id,
+      name: t.name,
+      email: t.email,
+      specialties: t.specialties,
+      clients: t.sessions || 0,
+      sessions: t.sessions || 0,
+      rating: 4.5 + Math.min((t.experience || 0) / 20, 0.5),
+      status: t.isActive ? 'ACTIVE' : 'INACTIVE',
+    })),
+    pagination: buildPaginationMeta(pageMeta.total, pagination.page, pagination.limit),
   };
 };

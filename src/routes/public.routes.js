@@ -15,4 +15,6 @@ router.get('/gyms/:slug/branding', PublicGymController.branding);
 /** Public gym profile for members (hours, plans, contact) */
 router.get('/gyms/:slug', PublicGymController.gymInfo);
 
+router.post('/contact', PublicGymController.contact);
+
 export default router;

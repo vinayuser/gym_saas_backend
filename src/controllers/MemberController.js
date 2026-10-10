@@ -39,3 +39,22 @@ export const remove = asyncHandler(async (req, res) => {
   );
   successResponse(res, result);
 });
+
+export const regenerateQr = asyncHandler(async (req, res) => {
+  const member = await MemberService.regenerateQr(
+    req.tenantId,
+    req.params.gymId,
+    req.params.memberId
+  );
+  successResponse(res, member, 'QR code reassigned');
+});
+
+export const provisionPortal = asyncHandler(async (req, res) => {
+  const data = await MemberService.provisionPortal(
+    req.tenantId,
+    req.params.gymId,
+    req.params.memberId,
+    req.body
+  );
+  successResponse(res, data, 'Portal access ready');
+});

@@ -8,6 +8,8 @@ const ALLOWED_FOLDERS = new Set([
   'gyms/logos',
   'gyms/gallery',
   'gyms/videos',
+  'gyms/ads/video',
+  'gyms/ads/audio',
   'invites',
   'products',
   'avatars',
@@ -75,7 +77,7 @@ export const uploadFromFile = async (file, options) => {
   let resourceType = options.resourceType || 'auto';
 
   if (resourceType === 'auto') {
-    if (mimetype.startsWith('video/')) resourceType = 'video';
+    if (mimetype.startsWith('video/') || mimetype.startsWith('audio/')) resourceType = 'video';
     else if (mimetype.startsWith('image/')) resourceType = 'image';
     else throw new BadRequestError('Unsupported file type');
   }

@@ -1,79 +1,58 @@
-import prisma from '../config/database.js';
+import { GymChatMessage } from '../schemas/index.js';
+import { aggregateOne } from '../helpers/pagination.js';
+import { createDoc, updateById } from '../helpers/document.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS } from '../helpers/constants.js';
+import { chatPublic } from '../projections/ops.projection.js';
+import { userBrief } from '../projections/user.projection.js';
 
-const senderSelect = {
-  id: true,
-  firstName: true,
-  lastName: true,
-  avatar: true,
-  role: true,
-};
+const senderLookups = [
+  ...lookupOne(COLLECTIONS.USERS, 'senderId', 'sender', userBrief),
+  ...lookupOne(COLLECTIONS.USERS, 'pinnedById', 'pinnedBy', userBrief),
+];
 
 export const findMany = (gymId, limit = 100) =>
-  prisma.gymChatMessage.findMany({
-    where: { gymId, deletedAt: null },
-    orderBy: [{ isPinned: 'desc' }, { createdAt: 'asc' }],
-    take: limit,
-    include: {
-      sender: { select: senderSelect },
-      pinnedBy: { select: senderSelect },
-    },
-  });
+  GymChatMessage.aggregate([
+    { $match: { gymId, deletedAt: null } },
+    { $sort: { isPinned: -1, createdAt: 1 } },
+    { $limit: limit },
+    ...senderLookups,
+    { $project: chatPublic },
+  ]);
 
 export const findById = (id, gymId) =>
-  prisma.gymChatMessage.findFirst({
-    where: { id, gymId, deletedAt: null },
-    include: {
-      sender: { select: senderSelect },
-      pinnedBy: { select: senderSelect },
-    },
+  aggregateOne(GymChatMessage, {
+    match: { _id: id, gymId, deletedAt: null },
+    lookups: senderLookups,
+    project: chatPublic,
   });
 
-export const create = (data) =>
-  prisma.gymChatMessage.create({
-    data,
-    include: {
-      sender: { select: senderSelect },
-      pinnedBy: { select: senderSelect },
-    },
-  });
+export const create = async (data) => {
+  const doc = await createDoc(GymChatMessage, data);
+  return findById(doc.id, doc.gymId);
+};
 
-export const updateContent = (id, content) =>
-  prisma.gymChatMessage.update({
-    where: { id },
-    data: { content, editedAt: new Date() },
-    include: {
-      sender: { select: senderSelect },
-      pinnedBy: { select: senderSelect },
-    },
-  });
+export const updateContent = async (id, content) => {
+  await updateById(GymChatMessage, id, { content, editedAt: new Date() });
+  const doc = await GymChatMessage.findById(id).lean();
+  return findById(id, doc?.gymId);
+};
 
-export const setPinned = (id, { isPinned, pinnedById }) =>
-  prisma.gymChatMessage.update({
-    where: { id },
-    data: {
-      isPinned,
-      pinnedAt: isPinned ? new Date() : null,
-      pinnedById: isPinned ? pinnedById : null,
-    },
-    include: {
-      sender: { select: senderSelect },
-      pinnedBy: { select: senderSelect },
-    },
+export const setPinned = async (id, { isPinned, pinnedById }) => {
+  await updateById(GymChatMessage, id, {
+    isPinned,
+    pinnedAt: isPinned ? new Date() : null,
+    pinnedById: isPinned ? pinnedById : null,
   });
+  const doc = await GymChatMessage.findById(id).lean();
+  return findById(id, doc?.gymId);
+};
 
 export const unpinAll = (gymId, exceptId = null) =>
-  prisma.gymChatMessage.updateMany({
-    where: {
-      gymId,
-      isPinned: true,
-      deletedAt: null,
-      ...(exceptId ? { id: { not: exceptId } } : {}),
-    },
-    data: { isPinned: false, pinnedAt: null, pinnedById: null },
-  });
+  GymChatMessage.updateMany(
+    { gymId, isPinned: true, deletedAt: null, ...(exceptId ? { _id: { $ne: exceptId } } : {}) },
+    { $set: { isPinned: false, pinnedAt: null, pinnedById: null } }
+  );
 
 export const softDelete = (id) =>
-  prisma.gymChatMessage.update({
-    where: { id },
-    data: { deletedAt: new Date(), isPinned: false, pinnedAt: null, pinnedById: null },
-  });
+  updateById(GymChatMessage, id, { deletedAt: new Date(), isPinned: false, pinnedAt: null, pinnedById: null });

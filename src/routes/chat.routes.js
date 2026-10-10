@@ -15,7 +15,7 @@ import {
 const router = Router({ mergeParams: true });
 router.use(authenticate, resolveTenant);
 
-const chatRoles = ['SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST', 'TRAINER'];
+const chatRoles = ['SUPER_ADMIN', 'GYM_OWNER', 'MANAGER', 'RECEPTIONIST', 'TRAINER', 'MEMBER'];
 
 router.get('/:gymId/chat/messages', requireRoles(...chatRoles), validate(listChatQuerySchema), ChatController.list);
 router.post('/:gymId/chat/messages', requireRoles(...chatRoles), validate(createChatMessageSchema), ChatController.create);

@@ -1,89 +1,68 @@
-import prisma from '../config/database.js';
+import { RefreshToken, PasswordReset, OtpVerification, User } from '../schemas/index.js';
+import { createDoc, asDoc } from '../helpers/document.js';
+import { aggregateOne } from '../helpers/pagination.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS } from '../helpers/constants.js';
+import { userSession } from '../projections/user.projection.js';
 
-export const createRefreshToken = (data) => prisma.refreshToken.create({ data });
+export const createRefreshToken = (data) => createDoc(RefreshToken, data);
 
 export const findRefreshToken = (token) =>
-  prisma.refreshToken.findFirst({
-    where: { token, revokedAt: null },
-    include: { user: true },
+  aggregateOne(RefreshToken, {
+    match: { token, revokedAt: null },
+    lookups: lookupOne(COLLECTIONS.USERS, 'userId', 'user'),
   });
 
 export const revokeRefreshToken = (token) =>
-  prisma.refreshToken.updateMany({
-    where: { token },
-    data: { revokedAt: new Date() },
-  });
+  RefreshToken.updateMany({ token }, { $set: { revokedAt: new Date() } });
 
 export const revokeAllUserTokens = (userId) =>
-  prisma.refreshToken.updateMany({
-    where: { userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  RefreshToken.updateMany({ userId, revokedAt: null }, { $set: { revokedAt: new Date() } });
 
 export const revokeOtherUserTokens = (userId, keepToken) =>
-  prisma.refreshToken.updateMany({
-    where: {
-      userId,
-      revokedAt: null,
-      NOT: { token: keepToken },
-    },
-    data: { revokedAt: new Date() },
-  });
+  RefreshToken.updateMany(
+    { userId, revokedAt: null, token: { $ne: keepToken } },
+    { $set: { revokedAt: new Date() } }
+  );
 
 export const listActiveSessions = (userId) =>
-  prisma.refreshToken.findMany({
-    where: {
-      userId,
-      revokedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: {
-      id: true,
-      token: true,
-      userAgent: true,
-      ipAddress: true,
-      createdAt: true,
-      lastUsedAt: true,
-      expiresAt: true,
-    },
-  });
+  RefreshToken.aggregate([
+    { $match: { userId, revokedAt: null, expiresAt: { $gt: new Date() } } },
+    { $sort: { createdAt: -1 } },
+    { $project: userSession },
+  ]);
 
 export const revokeSessionById = (userId, sessionId) =>
-  prisma.refreshToken.updateMany({
-    where: { id: sessionId, userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  RefreshToken.updateMany({ _id: sessionId, userId, revokedAt: null }, { $set: { revokedAt: new Date() } });
 
 export const touchRefreshToken = (token) =>
-  prisma.refreshToken.updateMany({
-    where: { token, revokedAt: null },
-    data: { lastUsedAt: new Date() },
-  });
+  RefreshToken.updateMany({ token, revokedAt: null }, { $set: { lastUsedAt: new Date() } });
 
-export const createPasswordReset = (data) => prisma.passwordReset.create({ data });
+export const createPasswordReset = (data) => createDoc(PasswordReset, data);
 
 export const findPasswordReset = (token) =>
-  prisma.passwordReset.findFirst({
-    where: { token, usedAt: null, expiresAt: { gt: new Date() } },
-    include: { user: true },
+  aggregateOne(PasswordReset, {
+    match: { token, usedAt: null, expiresAt: { $gt: new Date() } },
+    lookups: lookupOne(COLLECTIONS.USERS, 'userId', 'user'),
   });
 
-export const markPasswordResetUsed = (id) =>
-  prisma.passwordReset.update({ where: { id }, data: { usedAt: new Date() } });
+export const markPasswordResetUsed = async (id) =>
+  asDoc(await PasswordReset.findByIdAndUpdate(id, { $set: { usedAt: new Date() } }, { returnDocument: 'after' }));
 
-export const createOtp = (data) => prisma.otpVerification.create({ data });
+export const createOtp = (data) => createDoc(OtpVerification, data);
 
-export const findValidOtp = (userId, code, type) =>
-  prisma.otpVerification.findFirst({
-    where: {
+export const findValidOtp = async (userId, code, type) =>
+  asDoc(
+    await OtpVerification.findOne({
       userId,
       code,
       type,
       verifiedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-  });
+      expiresAt: { $gt: new Date() },
+    })
+  );
 
-export const markOtpVerified = (id) =>
-  prisma.otpVerification.update({ where: { id }, data: { verifiedAt: new Date() } });
+export const markOtpVerified = async (id) =>
+  asDoc(await OtpVerification.findByIdAndUpdate(id, { $set: { verifiedAt: new Date() } }, { returnDocument: 'after' }));
+
+export const touchUserLogin = (id) => User.findByIdAndUpdate(id, { $set: { lastLoginAt: new Date() } });

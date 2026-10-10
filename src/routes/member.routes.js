@@ -22,5 +22,17 @@ router.post('/:gymId/members', requireRoles(...staffRoles), validate(createMembe
 router.get('/:gymId/members/:memberId', requireRoles(...staffRoles, 'TRAINER'), validate(memberParamsSchema), MemberController.getById);
 router.put('/:gymId/members/:memberId', requireRoles(...staffRoles), validate(updateMemberSchema), MemberController.update);
 router.delete('/:gymId/members/:memberId', requireRoles('SUPER_ADMIN', 'GYM_OWNER', 'MANAGER'), validate(memberParamsSchema), MemberController.remove);
+router.post(
+  '/:gymId/members/:memberId/qr',
+  requireRoles(...staffRoles),
+  validate(memberParamsSchema),
+  MemberController.regenerateQr
+);
+router.post(
+  '/:gymId/members/:memberId/portal',
+  requireRoles(...staffRoles),
+  validate(memberParamsSchema),
+  MemberController.provisionPortal
+);
 
 export default router;

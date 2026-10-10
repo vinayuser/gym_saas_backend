@@ -1,50 +1,91 @@
-import prisma from '../config/database.js';
+import { SaasPayment } from '../schemas/index.js';
+import { paginate, aggregateOne, groupCount, sumField } from '../helpers/pagination.js';
+import { lookupOne } from '../helpers/query.js';
+import { COLLECTIONS, SORT } from '../helpers/constants.js';
 import { parsePagination, buildPaginationMeta } from '../utils/response.js';
 
-const paymentInclude = {
-  subscription: {
-    include: {
-      plan: {
-        select: {
-          id: true,
-          name: true,
-          type: true,
-          priceMonthly: true,
-        },
-      },
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          slug: true,
-          owner: {
-            select: {
-              id: true,
-              email: true,
-              firstName: true,
-              lastName: true,
-            },
+const paymentLookups = [
+  {
+    $lookup: {
+      from: COLLECTIONS.SUBSCRIPTIONS,
+      let: { sid: '$subscriptionId' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$_id', '$$sid'] } } },
+        ...lookupOne(COLLECTIONS.SUBSCRIPTION_PLANS, 'planId', 'plan', {
+          _id: 0,
+          id: '$_id',
+          name: 1,
+          type: 1,
+          priceMonthly: 1,
+        }),
+        {
+          $lookup: {
+            from: COLLECTIONS.TENANTS,
+            let: { tid: '$tenantId' },
+            pipeline: [
+              { $match: { $expr: { $eq: ['$_id', '$$tid'] } } },
+              ...lookupOne(COLLECTIONS.USERS, 'ownerId', 'owner', {
+                _id: 0,
+                id: '$_id',
+                email: 1,
+                firstName: 1,
+                lastName: 1,
+              }),
+              {
+                $lookup: {
+                  from: COLLECTIONS.GYM_INVITES,
+                  let: { tenantId: '$_id' },
+                  pipeline: [
+                    { $match: { $expr: { $eq: ['$tenantId', '$$tenantId'] }, status: 'ACCEPTED' } },
+                    { $sort: { acceptedAt: -1 } },
+                    { $limit: 1 },
+                    {
+                      $project: {
+                        _id: 0,
+                        id: '$_id',
+                        email: 1,
+                        businessName: 1,
+                        token: 1,
+                        razorpayOrderId: 1,
+                        razorpayPaymentId: 1,
+                        acceptedAt: 1,
+                      },
+                    },
+                  ],
+                  as: 'gymInvites',
+                },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  id: '$_id',
+                  name: 1,
+                  email: 1,
+                  slug: 1,
+                  owner: 1,
+                  gymInvites: 1,
+                },
+              },
+            ],
+            as: 'tenant',
           },
-          gymInvites: {
-            where: { status: 'ACCEPTED' },
-            orderBy: { acceptedAt: 'desc' },
-            take: 1,
-            select: {
-              id: true,
-              email: true,
-              businessName: true,
-              token: true,
-              razorpayOrderId: true,
-              razorpayPaymentId: true,
-              acceptedAt: true,
-            },
+        },
+        { $unwind: { path: '$tenant', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            _id: 0,
+            id: '$_id',
+            status: 1,
+            plan: 1,
+            tenant: 1,
           },
         },
-      },
+      ],
+      as: 'subscription',
     },
   },
-};
+  { $unwind: { path: '$subscription', preserveNullAndEmptyArrays: true } },
+];
 
 const serializeTransaction = (payment) => {
   const tenant = payment.subscription?.tenant;
@@ -100,93 +141,80 @@ const serializeTransaction = (payment) => {
   };
 };
 
+const nestedSearch = (search) => {
+  const value = search?.trim();
+  if (!value) return {};
+  return {
+    $or: [
+      { providerRef: { $regex: value, $options: 'i' } },
+      { provider: { $regex: value, $options: 'i' } },
+      { 'subscription.tenant.name': { $regex: value, $options: 'i' } },
+      { 'subscription.tenant.email': { $regex: value, $options: 'i' } },
+      { 'subscription.tenant.owner.email': { $regex: value, $options: 'i' } },
+      { 'subscription.plan.name': { $regex: value, $options: 'i' } },
+    ],
+  };
+};
+
+const paymentProject = {
+  _id: 0,
+  id: '$_id',
+  amount: 1,
+  currency: 1,
+  status: 1,
+  provider: 1,
+  providerRef: 1,
+  paidAt: 1,
+  createdAt: 1,
+  subscriptionId: 1,
+  subscription: 1,
+};
+
 export const listTransactions = async (query) => {
   const pagination = parsePagination(query);
   const search = query.search?.trim();
 
-  const where = {};
+  const match = {};
   if (query.status && query.status !== 'ALL') {
-    where.status = query.status;
+    match.status = query.status;
   }
 
-  if (search) {
-    where.OR = [
-      { providerRef: { contains: search, mode: 'insensitive' } },
-      { provider: { contains: search, mode: 'insensitive' } },
-      {
-        subscription: {
-          tenant: {
-            name: { contains: search, mode: 'insensitive' },
-          },
-        },
-      },
-      {
-        subscription: {
-          tenant: {
-            email: { contains: search, mode: 'insensitive' },
-          },
-        },
-      },
-      {
-        subscription: {
-          tenant: {
-            owner: {
-              email: { contains: search, mode: 'insensitive' },
-            },
-          },
-        },
-      },
-      {
-        subscription: {
-          plan: {
-            name: { contains: search, mode: 'insensitive' },
-          },
-        },
-      },
-    ];
-  }
+  const { data: payments, pagination: pageMeta } = await paginate(SaasPayment, {
+    match,
+    before: search ? [...paymentLookups, { $match: nestedSearch(search) }] : [],
+    lookups: search ? [] : paymentLookups,
+    project: paymentProject,
+    sort: SORT.CREATED_DESC,
+    page: pagination.page,
+    limit: pagination.limit,
+  });
 
-  const [payments, total, completedAgg, statusGroups] = await Promise.all([
-    prisma.saasPayment.findMany({
-      where,
-      include: paymentInclude,
-      orderBy: { createdAt: 'desc' },
-      skip: (pagination.page - 1) * pagination.limit,
-      take: pagination.limit,
-    }),
-    prisma.saasPayment.count({ where }),
-    prisma.saasPayment.aggregate({
-      where: { status: 'COMPLETED' },
-      _sum: { amount: true },
-      _count: true,
-    }),
-    prisma.saasPayment.groupBy({
-      by: ['status'],
-      _count: { _all: true },
-    }),
+  const [completedAgg, statusGroups] = await Promise.all([
+    sumField(SaasPayment, { match: { status: 'COMPLETED' }, field: 'amount' }),
+    groupCount(SaasPayment, { by: 'status' }),
   ]);
 
-  const countForGroup = (g) => g._count?._all ?? g._count ?? 0;
-  const statusCounts = Object.fromEntries(statusGroups.map((g) => [g.status, countForGroup(g)]));
+  const statusCounts = Object.fromEntries(statusGroups.map((g) => [g._id, g.count]));
 
   return {
     transactions: payments.map(serializeTransaction),
     summary: {
-      totalRevenue: completedAgg._sum.amount ?? 0,
-      completedCount: completedAgg._count,
+      totalRevenue: completedAgg.total ?? 0,
+      completedCount: completedAgg.count,
       pendingCount: statusCounts.PENDING || 0,
       failedCount: statusCounts.FAILED || 0,
       refundedCount: statusCounts.REFUNDED || 0,
-      totalCount: statusGroups.reduce((sum, g) => sum + countForGroup(g), 0),
+      totalCount: statusGroups.reduce((sum, g) => sum + g.count, 0),
     },
-    pagination: buildPaginationMeta(total, pagination.page, pagination.limit),
+    pagination: buildPaginationMeta(pageMeta.total, pagination.page, pagination.limit),
   };
 };
 
 export const getTransactionById = async (id) => {
-  const payment = await prisma.saasPayment.findUnique({
-    where: { id },
-    include: paymentInclude,
+  const payment = await aggregateOne(SaasPayment, {
+    match: { _id: id },
+    lookups: paymentLookups,
+    project: paymentProject,
   });
 
   if (!payment) return null;

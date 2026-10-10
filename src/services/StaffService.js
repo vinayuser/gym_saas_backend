@@ -1,7 +1,8 @@
-import prisma from '../config/database.js';
 import * as StaffModel from '../models/StaffModel.js';
 import * as GymModel from '../models/GymModel.js';
 import * as UserModel from '../models/UserModel.js';
+import { User, GymStaff, Trainer } from '../schemas/index.js';
+import { createDoc, updateById, asDoc } from '../helpers/document.js';
 import { hashPassword } from '../utils/password.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors.js';
 import { assertGymCapacity } from './PlatformBillingService.js';
@@ -82,10 +83,7 @@ export const list = async (tenantId, gymId, query) => {
 
   const trainers =
     trainerUserIds.length > 0
-      ? await prisma.trainer.findMany({
-          where: { gymId, userId: { in: trainerUserIds } },
-          select: { userId: true, bio: true, specialties: true },
-        })
+      ? (await Trainer.find({ gymId, userId: { $in: trainerUserIds } }).select('userId bio specialties')).map(asDoc)
       : [];
 
   const trainerByUser = Object.fromEntries(trainers.map((t) => [t.userId, t]));
@@ -108,9 +106,7 @@ export const getById = async (tenantId, gymId, staffId) => {
 
   let trainer = null;
   if (staff.user.role === 'TRAINER') {
-    trainer = await prisma.trainer.findFirst({
-      where: { gymId, userId: staff.userId },
-    });
+    trainer = asDoc(await Trainer.findOne({ gymId, userId: staff.userId }));
   }
 
   return { ...staff, trainer };
@@ -138,47 +134,39 @@ export const create = async (tenantId, gymId, body) => {
     body.designation || DESIGNATION_MAP[body.staffRole] || 'Staff';
   const hashedPassword = await hashPassword(body.password || 'Staff@123');
 
-  const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        tenantId,
-        email,
-        password: hashedPassword,
-        firstName,
-        lastName,
-        phone: body.phone || null,
-        avatar: body.avatar || null,
-        role: userRole,
-        status: 'ACTIVE',
-        emailVerified: true,
-      },
-    });
-
-    const gymStaff = await tx.gymStaff.create({
-      data: {
-        gymId,
-        userId: user.id,
-        designation,
-        joinedAt: body.joinedAt ? new Date(body.joinedAt) : new Date(),
-        isActive: true,
-        ...buildStaffEmploymentData(body),
-      },
-    });
-
-    let trainer = null;
-    if (userRole === 'TRAINER') {
-      trainer = await tx.trainer.create({
-        data: {
-          gymId,
-          userId: user.id,
-          bio: body.bio || null,
-          specialties: body.specializations || [],
-        },
-      });
-    }
-
-    return { gymStaff, user, trainer };
+  const user = await createDoc(User, {
+    tenantId,
+    email,
+    password: hashedPassword,
+    firstName,
+    lastName,
+    phone: body.phone || null,
+    avatar: body.avatar || null,
+    role: userRole,
+    status: 'ACTIVE',
+    emailVerified: true,
   });
+
+  const gymStaff = await createDoc(GymStaff, {
+    gymId,
+    userId: user.id,
+    designation,
+    joinedAt: body.joinedAt ? new Date(body.joinedAt) : new Date(),
+    isActive: true,
+    ...buildStaffEmploymentData(body),
+  });
+
+  let trainer = null;
+  if (userRole === 'TRAINER') {
+    trainer = await createDoc(Trainer, {
+      gymId,
+      userId: user.id,
+      bio: body.bio || null,
+      specialties: body.specializations || [],
+    });
+  }
+
+  const result = { gymStaff, user, trainer };
 
   return {
     ...result.gymStaff,
@@ -241,41 +229,30 @@ export const update = async (tenantId, gymId, staffId, body) => {
     Object.assign(staffUpdates, buildStaffEmploymentData(body));
   }
 
-  await prisma.$transaction(async (tx) => {
-    if (Object.keys(userUpdates).length) {
-      await tx.user.update({ where: { id: staff.userId }, data: userUpdates });
-    }
-    if (Object.keys(staffUpdates).length) {
-      await tx.gymStaff.update({ where: { id: staffId }, data: staffUpdates });
-    }
+  if (Object.keys(userUpdates).length) {
+    await updateById(User, staff.userId, userUpdates);
+  }
+  if (Object.keys(staffUpdates).length) {
+    await updateById(GymStaff, staffId, staffUpdates);
+  }
 
-    const role = userUpdates.role || staff.user.role;
-    if (role === 'TRAINER' || staff.user.role === 'TRAINER') {
-      const existing = await tx.trainer.findFirst({
-        where: { gymId, userId: staff.userId },
+  const role = userUpdates.role || staff.user.role;
+  if (role === 'TRAINER' || staff.user.role === 'TRAINER') {
+    const existing = asDoc(await Trainer.findOne({ gymId, userId: staff.userId }));
+    if (existing) {
+      await updateById(Trainer, existing.id, {
+        ...(body.bio !== undefined ? { bio: body.bio } : {}),
+        ...(body.specializations !== undefined ? { specialties: body.specializations } : {}),
       });
-      if (existing) {
-        await tx.trainer.update({
-          where: { id: existing.id },
-          data: {
-            ...(body.bio !== undefined ? { bio: body.bio } : {}),
-            ...(body.specializations !== undefined
-              ? { specialties: body.specializations }
-              : {}),
-          },
-        });
-      } else if (role === 'TRAINER') {
-        await tx.trainer.create({
-          data: {
-            gymId,
-            userId: staff.userId,
-            bio: body.bio || null,
-            specialties: body.specializations || [],
-          },
-        });
-      }
+    } else if (role === 'TRAINER') {
+      await createDoc(Trainer, {
+        gymId,
+        userId: staff.userId,
+        bio: body.bio || null,
+        specialties: body.specializations || [],
+      });
     }
-  });
+  }
 
   return getById(tenantId, gymId, staffId);
 };

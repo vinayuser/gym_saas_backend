@@ -1,5 +1,7 @@
 import { ForbiddenError, BadRequestError } from '../utils/errors.js';
-import prisma from '../config/database.js';
+import { Tenant, Gym } from '../schemas/index.js';
+import { asDoc } from '../helpers/document.js';
+import { notDeleted } from '../helpers/query.js';
 
 /**
  * Ensures tenant context is set and user belongs to the tenant.
@@ -19,9 +21,7 @@ export const resolveTenant = async (req, _res, next) => {
     }
 
     if (tenantId) {
-      const tenant = await prisma.tenant.findFirst({
-        where: { id: tenantId, deletedAt: null, isActive: true },
-      });
+      const tenant = asDoc(await Tenant.findOne({ _id: tenantId, ...notDeleted, isActive: true }));
 
       if (!tenant) {
         throw new BadRequestError('Invalid or inactive tenant');
@@ -48,13 +48,13 @@ export const validateGymAccess = async (req, _res, next) => {
       throw new BadRequestError('Gym ID is required');
     }
 
-    const gym = await prisma.gym.findFirst({
-      where: {
-        id: gymId,
-        deletedAt: null,
+    const gym = asDoc(
+      await Gym.findOne({
+        _id: gymId,
+        ...notDeleted,
         ...(req.tenantId ? { tenantId: req.tenantId } : {}),
-      },
-    });
+      })
+    );
 
     if (!gym) {
       throw new ForbiddenError('Gym not found or access denied');

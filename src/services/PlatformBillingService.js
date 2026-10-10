@@ -1,7 +1,17 @@
-import prisma from '../config/database.js';
+import {
+  PlatformCatalog,
+  PlatformAddon,
+  Gym,
+  GymStaff,
+  Trainer,
+  Member,
+  GymMembershipPlan,
+} from '../schemas/index.js';
+import { asDoc, updateById } from '../helpers/document.js';
+import { countDocuments } from '../helpers/pagination.js';
+import { notDeleted } from '../helpers/query.js';
+import { CATALOG_ID } from '../helpers/constants.js';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../utils/errors.js';
-
-const CATALOG_ID = 'default';
 
 const DEFAULT_ADDONS = [
   {
@@ -87,37 +97,39 @@ const serializeCatalog = (row, addons) => ({
 });
 
 const ensureCatalog = async () => {
-  await prisma.platformCatalog.upsert({
-    where: { id: CATALOG_ID },
-    update: {},
-    create: {
-      id: CATALOG_ID,
-      baseName: 'Base gym',
-      baseDescription: 'First gym on the platform. Extra gyms and modules are added on top.',
-      basePriceMonthly: 1999,
-      basePriceYearly: 19990,
-      extraGymPriceMonthly: 999,
-      extraGymPriceYearly: 9990,
-      extraUseBaseLimits: true,
+  await PlatformCatalog.findOneAndUpdate(
+    { _id: CATALOG_ID },
+    {
+      $setOnInsert: {
+        _id: CATALOG_ID,
+        baseName: 'Base gym',
+        baseDescription: 'First gym on the platform. Extra gyms and modules are added on top.',
+        basePriceMonthly: 1999,
+        basePriceYearly: 19990,
+        extraGymPriceMonthly: 999,
+        extraGymPriceYearly: 9990,
+        extraUseBaseLimits: true,
+      },
     },
-  });
+    { upsert: true }
+  );
 
   for (const addon of DEFAULT_ADDONS) {
-    await prisma.platformAddon.upsert({
-      where: { key: addon.key },
-      update: {},
-      create: addon,
-    });
+    await PlatformAddon.findOneAndUpdate(
+      { key: addon.key },
+      { $setOnInsert: addon },
+      { upsert: true }
+    );
   }
 };
 
 export const getCatalog = async () => {
   await ensureCatalog();
-  const [row, addons] = await Promise.all([
-    prisma.platformCatalog.findUnique({ where: { id: CATALOG_ID } }),
-    prisma.platformAddon.findMany({ orderBy: { sortOrder: 'asc' } }),
+  const [row, addonDocs] = await Promise.all([
+    asDoc(await PlatformCatalog.findById(CATALOG_ID)),
+    PlatformAddon.find().sort({ sortOrder: 1 }),
   ]);
-  return serializeCatalog(row, addons);
+  return serializeCatalog(row, addonDocs.map(asDoc));
 };
 
 export const updateCatalog = async (body) => {
@@ -140,30 +152,32 @@ export const updateCatalog = async (body) => {
     extraMaxPlans: limitOrNull(body.extraMaxPlans),
   };
 
-  await prisma.platformCatalog.update({ where: { id: CATALOG_ID }, data });
+  await updateById(PlatformCatalog, CATALOG_ID, data);
   return getCatalog();
 };
 
 export const updateAddon = async (key, body) => {
-  const addon = await prisma.platformAddon.findUnique({ where: { key } });
+  const addon = asDoc(await PlatformAddon.findOne({ key }));
   if (!addon) throw new NotFoundError('Add-on not found');
 
-  await prisma.platformAddon.update({
-    where: { key },
-    data: {
-      name: body.name != null ? String(body.name).trim() : addon.name,
-      description: body.description != null ? String(body.description).trim() : addon.description,
-      pricePerGymMonthly:
-        body.pricePerGymMonthly != null
-          ? priceOrThrow(body.pricePerGymMonthly, 'add-on monthly price')
-          : addon.pricePerGymMonthly,
-      pricePerGymYearly:
-        body.pricePerGymYearly != null
-          ? priceOrThrow(body.pricePerGymYearly, 'add-on yearly price')
-          : addon.pricePerGymYearly,
-      isActive: typeof body.isActive === 'boolean' ? body.isActive : addon.isActive,
-    },
-  });
+  await PlatformAddon.findOneAndUpdate(
+    { key },
+    {
+      $set: {
+        name: body.name != null ? String(body.name).trim() : addon.name,
+        description: body.description != null ? String(body.description).trim() : addon.description,
+        pricePerGymMonthly:
+          body.pricePerGymMonthly != null
+            ? priceOrThrow(body.pricePerGymMonthly, 'add-on monthly price')
+            : addon.pricePerGymMonthly,
+        pricePerGymYearly:
+          body.pricePerGymYearly != null
+            ? priceOrThrow(body.pricePerGymYearly, 'add-on yearly price')
+            : addon.pricePerGymYearly,
+        isActive: typeof body.isActive === 'boolean' ? body.isActive : addon.isActive,
+      },
+    }
+  );
 
   return getCatalog();
 };
@@ -174,10 +188,10 @@ const limitsForIndex = (catalog, index) => {
 };
 
 const countResource = (gymId, resource) => {
-  if (resource === 'staff') return prisma.gymStaff.count({ where: { gymId, isActive: true } });
-  if (resource === 'trainers') return prisma.trainer.count({ where: { gymId, isActive: true } });
-  if (resource === 'members') return prisma.member.count({ where: { gymId, deletedAt: null } });
-  return prisma.gymMembershipPlan.count({ where: { gymId, deletedAt: null } });
+  if (resource === 'staff') return countDocuments(GymStaff, { gymId, isActive: true });
+  if (resource === 'trainers') return countDocuments(Trainer, { gymId, isActive: true });
+  if (resource === 'members') return countDocuments(Member, { gymId, ...notDeleted });
+  return countDocuments(GymMembershipPlan, { gymId, ...notDeleted });
 };
 
 const RESOURCE_LABEL = {
@@ -189,12 +203,11 @@ const RESOURCE_LABEL = {
 
 export const assertGymCapacity = async (tenantId, gymId, resource) => {
   const catalog = await getCatalog();
-  const gyms = await prisma.gym.findMany({
-    where: { tenantId, deletedAt: null },
-    orderBy: { createdAt: 'asc' },
-    select: { id: true },
-  });
-  const index = Math.max(0, gyms.findIndex((gym) => gym.id === gymId));
+  const gyms = await Gym.find({ tenantId, ...notDeleted }).sort({ createdAt: 1 }).select('_id');
+  const index = Math.max(
+    0,
+    gyms.findIndex((gym) => gym._id === gymId)
+  );
   const cap = limitsForIndex(catalog, index)[resource];
   if (cap == null) return;
 
@@ -237,11 +250,9 @@ export const quoteForGyms = (catalog, gyms) => {
 
 export const accountForTenant = async (tenantId) => {
   const catalog = await getCatalog();
-  const gyms = await prisma.gym.findMany({
-    where: { tenantId, deletedAt: null },
-    orderBy: { createdAt: 'asc' },
-    select: { id: true, name: true, commercialAddons: true, dayPassPrice: true },
-  });
+  const gyms = (await Gym.find({ tenantId, ...notDeleted }).sort({ createdAt: 1 }).select(
+    'name commercialAddons dayPassPrice'
+  )).map(asDoc);
 
   const gymRows = gyms.map((gym, index) => ({
     id: gym.id,
@@ -263,7 +274,7 @@ export const updateGymCommercial = async (tenantId, gymId, body, actor) => {
   if (body.addons !== undefined && actor?.role !== 'SUPER_ADMIN') {
     throw new ForbiddenError('Optional tools can only be changed by the platform admin');
   }
-  const gym = await prisma.gym.findFirst({ where: { id: gymId, tenantId, deletedAt: null } });
+  const gym = asDoc(await Gym.findOne({ _id: gymId, tenantId, ...notDeleted }));
   if (!gym) throw new NotFoundError('Gym not found');
 
   const current = readAddons(gym.commercialAddons);
@@ -274,11 +285,12 @@ export const updateGymCommercial = async (tenantId, gymId, body, actor) => {
   const data = { commercialAddons: readAddons(nextAddons) };
 
   if (body.dayPassPrice !== undefined) {
-    data.dayPassPrice = body.dayPassPrice === null || body.dayPassPrice === ''
-      ? null
-      : priceOrThrow(body.dayPassPrice, 'day pass price');
+    data.dayPassPrice =
+      body.dayPassPrice === null || body.dayPassPrice === ''
+        ? null
+        : priceOrThrow(body.dayPassPrice, 'day pass price');
   }
 
-  await prisma.gym.update({ where: { id: gymId }, data });
+  await updateById(Gym, gymId, data);
   return accountForTenant(tenantId);
 };

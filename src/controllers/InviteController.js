@@ -17,6 +17,11 @@ export const getOverview = asyncHandler(async (req, res) => {
   successResponse(res, overview);
 });
 
+export const listRecords = asyncHandler(async (req, res) => {
+  const result = await InviteService.listBusinessRecords(req.params.id, req.query);
+  successResponse(res, result, 'Success', 200, { pagination: result.pagination });
+});
+
 export const create = asyncHandler(async (req, res) => {
   const invite = await InviteService.createInvite(req.user.id, req.body);
   successResponse(res, { invite, link: InviteService.getInviteLink(invite.token) }, 'Invite created', 201);

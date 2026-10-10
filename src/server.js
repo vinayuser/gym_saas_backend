@@ -1,11 +1,11 @@
 import app from './app.js';
 import env from './config/env.js';
 import logger from './utils/logger.js';
-import prisma from './config/database.js';
+import { connectDb, disconnectDb } from './config/database.js';
 
 const start = async () => {
   try {
-    await prisma.$connect();
+    await connectDb();
     logger.info('Database connected');
 
     app.listen(env.port, () => {
@@ -22,7 +22,7 @@ const start = async () => {
 start();
 
 const shutdown = async () => {
-  await prisma.$disconnect();
+  await disconnectDb();
   process.exit(0);
 };
 

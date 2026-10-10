@@ -32,6 +32,7 @@ export const list = async (tenantId, gymId, query) => {
     ...pagination,
     fulfillmentStatus: query.fulfillmentStatus,
     memberId: query.memberId,
+    search: pagination.search,
   });
   return {
     orders: rows.map(mapOrder),

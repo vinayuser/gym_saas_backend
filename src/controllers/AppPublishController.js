@@ -11,3 +11,8 @@ export const updatePublish = asyncHandler(async (req, res) => {
   const publish = await AppPublishService.updatePublishByInvite(req.params.id, req.body);
   successResponse(res, { publish }, 'App publish settings saved');
 });
+
+export const updateAppAds = asyncHandler(async (req, res) => {
+  const data = await AppPublishService.updateAppAdsByInvite(req.params.id, req.body);
+  successResponse(res, data, 'App ads updated');
+});

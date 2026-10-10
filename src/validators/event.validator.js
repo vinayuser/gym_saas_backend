@@ -34,3 +34,8 @@ export const updateEventSchema = z.object({
 export const eventParamsSchema = z.object({
   params: z.object({ gymId: z.string().uuid(), eventId: z.string().uuid() }),
 });
+
+export const bookEventSchema = z.object({
+  params: z.object({ gymId: z.string().uuid(), eventId: z.string().uuid() }),
+  body: z.object({ memberId: z.string().uuid() }),
+});

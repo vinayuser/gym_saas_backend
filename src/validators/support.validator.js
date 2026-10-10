@@ -36,6 +36,22 @@ export const listSupportTicketsSchema = z.object({
   }),
 });
 
+export const supportTicketIdSchema = z.object({
+  params: z.object({
+    ticketId: z.string().uuid(),
+  }),
+});
+
+export const replySupportTicketSchema = z.object({
+  params: z.object({
+    ticketId: z.string().uuid(),
+  }),
+  body: z.object({
+    message: z.string().trim().min(1).max(5000),
+    status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']).optional(),
+  }),
+});
+
 export const updateSupportTicketStatusSchema = z.object({
   params: z.object({
     ticketId: z.string().uuid(),

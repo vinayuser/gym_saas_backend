@@ -1,80 +1,121 @@
-import prisma from '../config/database.js';
+import { Member, Membership } from '../schemas/index.js';
+import { paginate, aggregateOne, countDocuments } from '../helpers/pagination.js';
+import { createDoc, updateById, softDeleteById } from '../helpers/document.js';
+import { lookupMany, notDeleted, textSearch } from '../helpers/query.js';
+import { COLLECTIONS, MEMBERSHIP_STATUS, SORT } from '../helpers/constants.js';
+import { memberList, memberDetail, planBrief } from '../projections/member.projection.js';
 
-export const findMany = (gymId, { skip, limit, search, sortBy, sortOrder, isActive }) => {
-  const where = {
-    gymId,
-    deletedAt: null,
-    ...(isActive !== undefined ? { isActive } : {}),
-    ...(search
-      ? {
-          OR: [
-            { firstName: { contains: search, mode: 'insensitive' } },
-            { lastName: { contains: search, mode: 'insensitive' } },
-            { email: { contains: search, mode: 'insensitive' } },
-            { phone: { contains: search, mode: 'insensitive' } },
-            { memberCode: { contains: search, mode: 'insensitive' } },
-          ],
-        }
-      : {}),
-  };
+const activeMembershipLookup = lookupMany(COLLECTIONS.MEMBERSHIPS, '_id', 'memberId', 'memberships', [
+  { $match: { status: MEMBERSHIP_STATUS.ACTIVE } },
+  { $sort: SORT.CREATED_DESC },
+  { $limit: 1 },
+  {
+    $lookup: {
+      from: COLLECTIONS.GYM_MEMBERSHIP_PLANS,
+      let: { pid: '$planId' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$_id', '$$pid'] } } },
+        { $project: planBrief },
+      ],
+      as: 'plan',
+    },
+  },
+  { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+  {
+    $project: {
+      _id: 0,
+      id: '$_id',
+      gymId: 1,
+      memberId: 1,
+      planId: 1,
+      status: 1,
+      startDate: 1,
+      endDate: 1,
+      amountPaid: 1,
+      plan: 1,
+      createdAt: 1,
+    },
+  },
+]);
 
-  return Promise.all([
-    prisma.member.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { [sortBy]: sortOrder },
-      include: {
-        memberships: {
-          where: { status: 'ACTIVE' },
-          take: 1,
-          include: { plan: { select: { id: true, name: true } } },
-        },
-      },
-    }),
-    prisma.member.count({ where }),
-  ]);
+export const findMany = async (gymId, { skip, limit, search, sortBy, sortOrder, isActive }) => {
+  const { data, pagination } = await paginate(Member, {
+    match: {
+      gymId,
+      ...notDeleted,
+      ...(isActive !== undefined ? { isActive } : {}),
+      ...textSearch(search, ['firstName', 'lastName', 'email', 'phone', 'memberCode']),
+    },
+    lookups: [activeMembershipLookup],
+    project: memberList,
+    sort: { [sortBy || 'createdAt']: sortOrder === 'asc' ? 1 : -1 },
+    page: Math.floor((skip || 0) / (limit || 10)) + 1,
+    limit,
+  });
+  return [data, pagination.total];
 };
 
+export const findByCode = (gymId, memberCode) =>
+  aggregateOne(Member, {
+    match: { gymId, memberCode, ...notDeleted },
+    lookups: [activeMembershipLookup],
+    project: memberList,
+  });
+
 export const findById = (id, gymId) =>
-  prisma.member.findFirst({
-    where: { id, gymId, deletedAt: null },
-    include: {
-      memberships: { include: { plan: true }, orderBy: { createdAt: 'desc' } },
-      measurements: { orderBy: { measuredAt: 'desc' }, take: 10 },
-      workoutPlans: { where: { isActive: true }, take: 5 },
-      dietPlans: { where: { isActive: true }, take: 5 },
-    },
+  aggregateOne(Member, {
+    match: { _id: id, gymId, ...notDeleted },
+    lookups: [
+      lookupMany(COLLECTIONS.MEMBERSHIPS, '_id', 'memberId', 'memberships', [
+        { $sort: SORT.CREATED_DESC },
+        {
+          $lookup: {
+            from: COLLECTIONS.GYM_MEMBERSHIP_PLANS,
+            localField: 'planId',
+            foreignField: '_id',
+            as: 'plan',
+          },
+        },
+        { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+        {
+          $addFields: {
+            id: '$_id',
+            'plan.id': '$plan._id',
+          },
+        },
+      ]),
+      lookupMany(COLLECTIONS.BODY_MEASUREMENTS, '_id', 'memberId', 'measurements', [
+        { $sort: { measuredAt: -1 } },
+        { $limit: 10 },
+        { $addFields: { id: '$_id' } },
+        { $project: { _id: 0 } },
+      ]),
+      lookupMany(COLLECTIONS.WORKOUT_PLANS, '_id', 'memberId', 'workoutPlans', [
+        { $match: { isActive: true } },
+        { $limit: 5 },
+        { $addFields: { id: '$_id' } },
+        { $project: { _id: 0 } },
+      ]),
+      lookupMany(COLLECTIONS.DIET_PLANS, '_id', 'memberId', 'dietPlans', [
+        { $match: { isActive: true } },
+        { $limit: 5 },
+        { $addFields: { id: '$_id' } },
+        { $project: { _id: 0 } },
+      ]),
+    ],
+    project: memberDetail,
   });
 
-export const create = (memberData, membershipData = null) =>
-  prisma.$transaction(async (tx) => {
-    const member = await tx.member.create({ data: memberData });
+export const create = async (memberData, membershipData = null) => {
+  const member = await createDoc(Member, memberData);
+  if (membershipData) {
+    await createDoc(Membership, { ...membershipData, memberId: member.id, gymId: member.gymId });
+  }
+  return findById(member.id, member.gymId);
+};
 
-    if (membershipData) {
-      await tx.membership.create({
-        data: {
-          ...membershipData,
-          memberId: member.id,
-        },
-      });
-    }
+export const update = (id, data) => updateById(Member, id, data);
 
-    return tx.member.findFirst({
-      where: { id: member.id },
-      include: {
-        memberships: {
-          include: { plan: { select: { id: true, name: true, price: true, billingCycle: true } } },
-          orderBy: { createdAt: 'desc' },
-        },
-      },
-    });
-  });
+export const softDelete = (id) => softDeleteById(Member, id, { isActive: false });
 
-export const update = (id, data) => prisma.member.update({ where: { id }, data });
-
-export const softDelete = (id) =>
-  prisma.member.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
-
-export const countByGym = (gymId) =>
-  prisma.member.count({ where: { gymId, deletedAt: null } });
+export const countByGym = (gymId) => countDocuments(Member, { gymId, ...notDeleted });
