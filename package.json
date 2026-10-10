@@ -12,7 +12,6 @@
     "seed": "node scripts/seed.js"
   },
   "dependencies": {
-    "@prisma/client": "^6.9.0",
     "bcryptjs": "^3.0.2",
     "bullmq": "^5.53.0",
     "cloudinary": "^2.6.1",
@@ -38,7 +37,6 @@
     "zod": "^3.25.56"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10",
-    "prisma": "^6.9.0"
+    "nodemon": "^3.1.10"
   }
 }

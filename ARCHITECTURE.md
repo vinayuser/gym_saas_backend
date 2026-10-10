@@ -14,13 +14,15 @@ backend/src/
 │   ├── GymService.js
 │   └── MemberService.js
 │
-├── models/                   # Data access (Prisma)
+├── models/                   # Data access (Mongoose aggregations / queries)
 │   ├── UserModel.js
 │   ├── AuthModel.js
 │   ├── TenantModel.js
 │   ├── GymModel.js
 │   └── MemberModel.js
 │
+├── schemas/                  # Mongoose schema definitions
+├── api/v1/                   # Member mobile app APIs (/api/v1/app)
 ├── routes/
 │   ├── index.js
 │   ├── auth.routes.js
@@ -47,8 +49,9 @@ Functional **named exports** only (no classes):
 ```js
 export const list = asyncHandler(async (req, res) => { ... });
 export const login = async ({ email, password }) => { ... };
-export const findById = (id) => prisma.user.findFirst({ ... });
+export const findById = (id) => User.findOne({ _id: id, deletedAt: null });
 ```
+
 
 ## Request flow
 

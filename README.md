@@ -1,6 +1,6 @@
 # Gym SaaS Backend
 
-Multi-tenant gym management API (Express + Prisma + PostgreSQL).
+Multi-tenant gym management API (Express + Mongoose + MongoDB).
 
 ## Production (Oracle VM)
 
@@ -16,4 +16,4 @@ Deploys on push to `main` via GitHub Actions.
 
 Demo URL (via host nginx on port **8090**): `http://<ORACLE_HOST>:8090/api/v1/health`
 
-Stack on server: PostgreSQL + Redis + API containers in `/opt/gym-saas-backend`.
+Stack on server: MongoDB + Redis + API containers in `/opt/gym-saas-backend`.

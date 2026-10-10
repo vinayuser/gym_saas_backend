@@ -72,3 +72,24 @@ export const SaleItem = mongoose.models.SaleItem || mongoose.model(
     { collection: COLLECTIONS.SALE_ITEMS }
   )
 );
+
+export const Cart = mongoose.models.Cart || mongoose.model(
+  'Cart',
+  defineSchema(
+    {
+      gymId: { type: String, required: true, index: true },
+      tenantId: String,
+      memberId: { type: String, required: true },
+      items: {
+        type: [
+          {
+            productId: { type: String, required: true },
+            quantity: { type: Number, required: true, min: 1 },
+          },
+        ],
+        default: [],
+      },
+    },
+    { collection: COLLECTIONS.CARTS, indexes: [{ keys: { memberId: 1 }, options: { unique: true } }] }
+  )
+);

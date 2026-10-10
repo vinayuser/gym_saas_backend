@@ -13,6 +13,9 @@ export const listByEvent = (eventId) =>
     { $project: { _id: 0, id: '$_id', eventId: 1, memberId: 1, status: 1, bookedAt: 1, member: 1 } },
   ]);
 
+/** Alias used by EventService */
+export const findByEvent = listByEvent;
+
 export const listByMember = (memberId) =>
   EventBooking.aggregate([
     { $match: { memberId } },
@@ -31,6 +34,9 @@ export const listByMember = (memberId) =>
 
 export const findByEventMember = async (eventId, memberId) =>
   asDoc(await EventBooking.findOne({ eventId, memberId }));
+
+/** Alias used by EventService.bookEvent / cancelBooking */
+export const findOne = findByEventMember;
 
 export const create = (data) => createDoc(EventBooking, data);
 

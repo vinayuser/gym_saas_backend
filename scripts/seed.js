@@ -1,5 +1,5 @@
 /**
- * Volume seed (Mongo port of prisma/scripts/seed-volume.js).
+ * Volume seed for MongoDB.
  * Fills lists so pagination works. Each gym gets 4 membership plans, not more.
  *
  *   superadmin@gymsaas.com / Admin@123

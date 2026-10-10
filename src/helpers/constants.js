@@ -51,6 +51,7 @@ export const COLLECTIONS = {
   WORKOUT_PLANS: 'workout_plans',
   DIET_PLANS: 'diet_plans',
   DAY_PASSES: 'day_passes',
+  CARTS: 'carts',
   CONTACT_MESSAGES: 'contact_messages',
   GYM_INVITES: 'gym_invites',
   PLATFORM_BROADCASTS: 'platform_broadcasts',

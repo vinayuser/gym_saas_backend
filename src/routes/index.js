@@ -31,6 +31,7 @@ import platformBillingRoutes from './platformBilling.routes.js';
 import adminRoutes from './admin.routes.js';
 import dayPassRoutes from './dayPass.routes.js';
 import memberCareRoutes from './memberCare.routes.js';
+import appApiV1 from '../api/v1/index.js';
 
 const router = Router();
 
@@ -39,6 +40,7 @@ router.get('/health', (_req, res) => {
 });
 
 router.use('/public', publicRoutes);
+router.use('/app', appApiV1);
 router.use('/member', memberPortalRoutes);
 router.use('/auth', authRoutes);
 router.use('/tenants', tenantRoutes);

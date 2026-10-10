@@ -159,13 +159,34 @@ export const DayPass = mongoose.models.DayPass || mongoose.model(
       guestName: { type: String, required: true },
       phone: String,
       email: String,
+      memberId: { type: String, index: true },
+      userId: { type: String, index: true },
       amount: { type: Number, required: true },
       paid: { type: Boolean, default: true },
+      status: {
+        type: String,
+        default: 'ACTIVE',
+        enum: ['PENDING_PAYMENT', 'ACTIVE', 'USED', 'EXPIRED', 'FAILED', 'CANCELLED'],
+      },
+      paymentRef: String,
+      razorpayOrderId: String,
+      razorpayPaymentId: String,
+      bookingCode: String,
+      passCode: String,
+      qrToken: String,
+      qrExpiresAt: Date,
       validOn: { type: Date, required: true },
       checkedInAt: Date,
       notes: String,
     },
-    { collection: COLLECTIONS.DAY_PASSES, indexes: [{ keys: { gymId: 1, validOn: -1 } }] }
+    {
+      collection: COLLECTIONS.DAY_PASSES,
+      indexes: [
+        { keys: { gymId: 1, validOn: -1 } },
+        { keys: { memberId: 1, validOn: -1 } },
+        { keys: { razorpayOrderId: 1 } },
+      ],
+    }
   )
 );
 

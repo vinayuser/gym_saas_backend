@@ -85,14 +85,17 @@ export const Notification = mongoose.models.Notification || mongoose.model(
     {
       tenantId: String,
       userId: String,
+      gymId: String,
       channel: { type: String, required: true },
+      type: String,
       title: { type: String, required: true },
       message: { type: String, required: true },
       status: { type: String, default: 'PENDING' },
       metadata: { type: mongoose.Schema.Types.Mixed },
       sentAt: Date,
+      readAt: Date,
     },
-    { collection: COLLECTIONS.NOTIFICATIONS }
+    { collection: COLLECTIONS.NOTIFICATIONS, indexes: [{ keys: { userId: 1, createdAt: -1 } }] }
   )
 );
 
