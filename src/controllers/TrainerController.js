@@ -6,3 +6,8 @@ export const performance = asyncHandler(async (req, res) => {
   const data = await TrainerService.performance(req.tenantId, req.params.gymId, req.query);
   successResponse(res, data);
 });
+
+export const getById = asyncHandler(async (req, res) => {
+  const data = await TrainerService.getById(req.tenantId, req.params.gymId, req.params.trainerId);
+  successResponse(res, data);
+});

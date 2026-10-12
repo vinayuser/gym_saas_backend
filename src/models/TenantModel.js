@@ -39,7 +39,7 @@ const tenantLookups = [
       pipeline: [
         { $match: { $expr: { $eq: ['$subscriptionId', '$$sid'] } } },
         { $sort: { createdAt: -1 } },
-        { $limit: 5 },
+        { $limit: 25 },
         { $project: saasPaymentPublic },
       ],
       as: '_payments',

@@ -78,23 +78,29 @@ export const lookup = async (tenantId, gymId, query) => {
   await validateGym(tenantId, gymId);
   const search = String(query.q || query.search || '').trim();
   if (!search) return { members: [] };
-  const [members] = await MemberModel.findMany(gymId, {
-    skip: 0,
-    limit: 8,
-    search,
-    sortBy: 'firstName',
-    sortOrder: 'asc',
-  });
+  const [[members], openIds] = await Promise.all([
+    MemberModel.findMany(gymId, {
+      skip: 0,
+      limit: 16,
+      search,
+      sortBy: 'firstName',
+      sortOrder: 'asc',
+    }),
+    AttendanceModel.findOpenMemberIds(gymId),
+  ]);
   return {
-    members: members.map((m) => ({
-      id: m.id,
-      memberCode: m.memberCode,
-      firstName: m.firstName,
-      lastName: m.lastName,
-      phone: m.phone,
-      planName: m.memberships?.[0]?.plan?.name || '—',
-      isActive: m.isActive,
-    })),
+    members: members
+      .filter((m) => !openIds.has(String(m.id)))
+      .slice(0, 8)
+      .map((m) => ({
+        id: m.id,
+        memberCode: m.memberCode,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        phone: m.phone,
+        planName: m.memberships?.[0]?.plan?.name || '—',
+        isActive: m.isActive,
+      })),
   };
 };
 

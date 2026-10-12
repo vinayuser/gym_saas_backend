@@ -146,3 +146,14 @@ export const findOpenCheckIn = async (gymId, memberId) => {
     }).sort({ checkInAt: -1 })
   );
 };
+
+export const findOpenMemberIds = async (gymId) => {
+  const { dayStart } = dayRange();
+  const rows = await Attendance.find({
+    gymId,
+    type: 'CHECK_IN',
+    checkOutAt: null,
+    checkInAt: { $gte: dayStart },
+  }).select('memberId');
+  return new Set(rows.map((row) => String(row.memberId)));
+};
